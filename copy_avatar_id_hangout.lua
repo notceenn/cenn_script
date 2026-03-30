@@ -58,7 +58,7 @@ local function copyAvatar(target)
         return
     end
 
-    -- ✅ Aksesoris dari GetAccessories
+    -- Aksesoris dari GetAccessories
     local accsData = {}
     local addedIds = {}
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
@@ -81,14 +81,13 @@ local function copyAvatar(target)
         end
     end
 
-    -- ✅ Fallback: scan Accessory langsung dari karakter
+    -- Fallback scan aksesoris langsung dari karakter
     for _, obj in pairs(char:GetDescendants()) do
         if obj:IsA("Accessory") then
             local handle = obj:FindFirstChild("Handle")
             local mesh = handle and handle:FindFirstChildOfClass("SpecialMesh")
             local id = mesh and extractId(mesh.MeshId) or 0
             if id == 0 and mesh then id = extractId(mesh.TextureId) end
-
             if id ~= 0 and not addedIds[id] then
                 addedIds[id] = true
                 local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
@@ -110,7 +109,7 @@ local function copyAvatar(target)
         end
     end
 
-    -- ✅ Fallback Shirt/Pants/Face jika desc kosong
+    -- Fallback Shirt/Pants/Face
     local shirtId = d.Shirt == 0 and extractId((char:FindFirstChildOfClass("Shirt") or {}).ShirtTemplate) or d.Shirt
     local pantsId = d.Pants == 0 and extractId((char:FindFirstChildOfClass("Pants") or {}).PantsTemplate) or d.Pants
     local faceId  = d.Face
@@ -119,47 +118,7 @@ local function copyAvatar(target)
         if decal then faceId = extractId(decal.Texture) end
     end
 
-    -- ✅ Clone Face & Aksesoris langsung (untuk yang tidak ke-apply via FireServer)
-    local dstChar = LocalPlayer.Character
-    if dstChar then
-        -- Face
-        local dstHead = dstChar:FindFirstChild("Head")
-        local srcHead = char:FindFirstChild("Head")
-        if dstHead and srcHead then
-            for _, v in pairs(dstHead:GetChildren()) do
-                if v:IsA("Decal") then v:Destroy() end
-            end
-            for _, v in pairs(srcHead:GetChildren()) do
-                if v:IsA("Decal") then v:Clone().Parent = dstHead end
-            end
-        end
-
-        -- Aksesoris & Jacket (WrapLayer)
-        for _, v in pairs(dstChar:GetChildren()) do
-            if v:IsA("Accessory") then v:Destroy() end
-        end
-        for _, obj in pairs(char:GetChildren()) do
-            if obj:IsA("Accessory") then
-                local newAcc = obj:Clone()
-                local handle = newAcc:FindFirstChild("Handle")
-                local srcHandle = obj:FindFirstChild("Handle")
-                if handle and srcHandle then
-                    local srcWeld = srcHandle:FindFirstChild("AccessoryWeld") or srcHandle:FindFirstChildOfClass("Weld")
-                    if srcWeld and srcWeld.Part1 then
-                        local newWeld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
-                        local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
-                        if newWeld and targetPart then
-                            newWeld.Part0 = handle
-                            newWeld.Part1 = targetPart
-                        end
-                    end
-                end
-                newAcc.Parent = dstChar
-            end
-        end
-    end
-
-    -- FireServer
+    -- FireServer dulu
     local fireOk, fireErr = pcall(function()
         ApplyOutfit:FireServer({
             Head = d.Head, Torso = d.Torso,
@@ -180,6 +139,58 @@ local function copyAvatar(target)
             Accessories = accsData,
         })
     end)
+
+    -- ✅ Tunggu server apply, lalu bersihkan SEMUA aksesoris lama dan replace
+    task.wait(1)
+
+    local dstChar = LocalPlayer.Character
+    if dstChar then
+        -- ✅ Hapus SEMUA aksesoris lokal tanpa terkecuali
+        repeat
+            local found = false
+            for _, v in pairs(dstChar:GetChildren()) do
+                if v:IsA("Accessory") then
+                    v:Destroy()
+                    found = true
+                end
+            end
+        until not found
+
+        -- ✅ Clone Face
+        local dstHead = dstChar:FindFirstChild("Head")
+        local srcHead = char:FindFirstChild("Head")
+        if dstHead and srcHead then
+            for _, v in pairs(dstHead:GetChildren()) do
+                if v:IsA("Decal") then v:Destroy() end
+            end
+            for _, v in pairs(srcHead:GetChildren()) do
+                if v:IsA("Decal") then v:Clone().Parent = dstHead end
+            end
+        end
+
+        -- ✅ Clone SEMUA aksesoris dari target persis sama
+        for _, obj in pairs(char:GetChildren()) do
+            if obj:IsA("Accessory") then
+                local newAcc = obj:Clone()
+                local handle = newAcc:FindFirstChild("Handle")
+                local srcHandle = obj:FindFirstChild("Handle")
+                if handle and srcHandle then
+                    local srcWeld = srcHandle:FindFirstChild("AccessoryWeld")
+                        or srcHandle:FindFirstChildOfClass("Weld")
+                    if srcWeld and srcWeld.Part1 then
+                        local newWeld = handle:FindFirstChild("AccessoryWeld")
+                            or handle:FindFirstChildOfClass("Weld")
+                        local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
+                        if newWeld and targetPart then
+                            newWeld.Part0 = handle
+                            newWeld.Part1 = targetPart
+                        end
+                    end
+                end
+                newAcc.Parent = dstChar
+            end
+        end
+    end
 
     Rayfield:Notify({
         Title = fireOk and "✅ Berhasil!" or "⚠️ Partial",
