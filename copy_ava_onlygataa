@@ -44,6 +44,30 @@ local function extractId(str)
     return id and tonumber(id) or 0
 end
 
+local function applyDescription(d, accsData, char)
+    local fireOk, fireErr = pcall(function()
+        ApplyOutfit:FireServer({
+            Head = d.Head, Torso = d.Torso,
+            LeftArm = d.LeftArm, RightArm = d.RightArm,
+            LeftLeg = d.LeftLeg, RightLeg = d.RightLeg,
+            Shirt = d.Shirt, Pants = d.Pants,
+            GraphicTShirt = d.GraphicTShirt, Face = d.Face,
+            HeadColor = d.HeadColor, TorsoColor = d.TorsoColor,
+            LeftArmColor = d.LeftArmColor, RightArmColor = d.RightArmColor,
+            LeftLegColor = d.LeftLegColor, RightLegColor = d.RightLegColor,
+            HeadScale = d.HeadScale, HeightScale = d.HeightScale,
+            WidthScale = d.WidthScale, BodyTypeScale = d.BodyTypeScale,
+            DepthScale = d.DepthScale, ProportionScale = d.ProportionScale,
+            IdleAnimation = d.IdleAnimation, RunAnimation = d.RunAnimation,
+            WalkAnimation = d.WalkAnimation, JumpAnimation = d.JumpAnimation,
+            ClimbAnimation = d.ClimbAnimation, SwimAnimation = d.SwimAnimation,
+            FallAnimation = d.FallAnimation, MoodAnimation = d.MoodAnimation,
+            Accessories = accsData,
+        })
+    end)
+    return fireOk, fireErr
+end
+
 local function copyAvatar(target)
     local char = target and target.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -58,7 +82,6 @@ local function copyAvatar(target)
         return
     end
 
-    -- Aksesoris dari GetAccessories
     local accsData = {}
     local addedIds = {}
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
@@ -81,7 +104,6 @@ local function copyAvatar(target)
         end
     end
 
-    -- Fallback scan aksesoris langsung dari karakter
     for _, obj in pairs(char:GetDescendants()) do
         if obj:IsA("Accessory") then
             local handle = obj:FindFirstChild("Handle")
@@ -109,7 +131,6 @@ local function copyAvatar(target)
         end
     end
 
-    -- Fallback Shirt/Pants/Face
     local shirtId = d.Shirt == 0 and extractId((char:FindFirstChildOfClass("Shirt") or {}).ShirtTemplate) or d.Shirt
     local pantsId = d.Pants == 0 and extractId((char:FindFirstChildOfClass("Pants") or {}).PantsTemplate) or d.Pants
     local faceId  = d.Face
@@ -118,45 +139,22 @@ local function copyAvatar(target)
         if decal then faceId = extractId(decal.Texture) end
     end
 
-    -- FireServer dulu
-    local fireOk, fireErr = pcall(function()
-        ApplyOutfit:FireServer({
-            Head = d.Head, Torso = d.Torso,
-            LeftArm = d.LeftArm, RightArm = d.RightArm,
-            LeftLeg = d.LeftLeg, RightLeg = d.RightLeg,
-            Shirt = shirtId, Pants = pantsId,
-            GraphicTShirt = d.GraphicTShirt, Face = faceId,
-            HeadColor = d.HeadColor, TorsoColor = d.TorsoColor,
-            LeftArmColor = d.LeftArmColor, RightArmColor = d.RightArmColor,
-            LeftLegColor = d.LeftLegColor, RightLegColor = d.RightLegColor,
-            HeadScale = d.HeadScale, HeightScale = d.HeightScale,
-            WidthScale = d.WidthScale, BodyTypeScale = d.BodyTypeScale,
-            DepthScale = d.DepthScale, ProportionScale = d.ProportionScale,
-            IdleAnimation = d.IdleAnimation, RunAnimation = d.RunAnimation,
-            WalkAnimation = d.WalkAnimation, JumpAnimation = d.JumpAnimation,
-            ClimbAnimation = d.ClimbAnimation, SwimAnimation = d.SwimAnimation,
-            FallAnimation = d.FallAnimation, MoodAnimation = d.MoodAnimation,
-            Accessories = accsData,
-        })
-    end)
+    d.Shirt = shirtId
+    d.Pants = pantsId
+    d.Face = faceId
 
-    -- ✅ Tunggu server apply, lalu bersihkan SEMUA aksesoris lama dan replace
+    local fireOk, fireErr = applyDescription(d, accsData, char)
+
     task.wait(1)
-
     local dstChar = LocalPlayer.Character
     if dstChar then
-        -- ✅ Hapus SEMUA aksesoris lokal tanpa terkecuali
         repeat
             local found = false
             for _, v in pairs(dstChar:GetChildren()) do
-                if v:IsA("Accessory") then
-                    v:Destroy()
-                    found = true
-                end
+                if v:IsA("Accessory") then v:Destroy() found = true end
             end
         until not found
 
-        -- ✅ Clone Face
         local dstHead = dstChar:FindFirstChild("Head")
         local srcHead = char:FindFirstChild("Head")
         if dstHead and srcHead then
@@ -168,18 +166,15 @@ local function copyAvatar(target)
             end
         end
 
-        -- ✅ Clone SEMUA aksesoris dari target persis sama
         for _, obj in pairs(char:GetChildren()) do
             if obj:IsA("Accessory") then
                 local newAcc = obj:Clone()
                 local handle = newAcc:FindFirstChild("Handle")
                 local srcHandle = obj:FindFirstChild("Handle")
                 if handle and srcHandle then
-                    local srcWeld = srcHandle:FindFirstChild("AccessoryWeld")
-                        or srcHandle:FindFirstChildOfClass("Weld")
+                    local srcWeld = srcHandle:FindFirstChild("AccessoryWeld") or srcHandle:FindFirstChildOfClass("Weld")
                     if srcWeld and srcWeld.Part1 then
-                        local newWeld = handle:FindFirstChild("AccessoryWeld")
-                            or handle:FindFirstChildOfClass("Weld")
+                        local newWeld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
                         local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
                         if newWeld and targetPart then
                             newWeld.Part0 = handle
@@ -197,6 +192,59 @@ local function copyAvatar(target)
         Content = fireOk
             and ("Avatar " .. target.Name .. " dicopy! (" .. #accsData .. " acc)")
             or tostring(fireErr):sub(1, 60),
+        Duration = 4,
+        Image = 4483362458,
+    })
+end
+
+local function resetAvatar()
+    local ok, d = pcall(function()
+        return Players:GetHumanoidDescriptionFromUserId(LocalPlayer.UserId)
+    end)
+    if not ok or not d then
+        Rayfield:Notify({ Title = "❌ Error", Content = "Gagal ambil avatar asli!", Duration = 3, Image = 4483362458 })
+        return
+    end
+
+    local accsData = {}
+    local ok2, accs = pcall(function() return d:GetAccessories(true) end)
+    if ok2 and accs then
+        for _, acc in pairs(accs) do
+            if acc.AssetId ~= 0 then
+                local entry = {
+                    AssetId = acc.AssetId,
+                    AccessoryType = acc.AccessoryType,
+                    IsLayered = acc.Order ~= nil,
+                    Position = acc.Position or Vector3.new(0,0,0),
+                    Rotation = acc.Rotation or Vector3.new(0,0,0),
+                    Scale = acc.Scale or Vector3.new(1,1,1),
+                    Puffiness = acc.Puffiness or 0,
+                }
+                if acc.Order then entry.Order = acc.Order end
+                table.insert(accsData, entry)
+            end
+        end
+    end
+
+    local fireOk, fireErr = applyDescription(d, accsData)
+
+    task.wait(1)
+    local dstChar = LocalPlayer.Character
+    if dstChar then
+        repeat
+            local found = false
+            for _, v in pairs(dstChar:GetChildren()) do
+                if v:IsA("Accessory") then v:Destroy() found = true end
+            end
+        until not found
+
+        local hum = dstChar:FindFirstChildOfClass("Humanoid")
+        if hum then hum:ApplyDescription(d) end
+    end
+
+    Rayfield:Notify({
+        Title = fireOk and "✅ Reset Berhasil!" or "❌ Gagal",
+        Content = fireOk and "Avatar asli kamu dipulihkan!" or tostring(fireErr):sub(1, 60),
         Duration = 4,
         Image = 4483362458,
     })
@@ -263,6 +311,13 @@ Tab:CreateButton({
             return
         end
         copyAvatar(selectedPlayer)
+    end,
+})
+
+Tab:CreateButton({
+    Name = "🔁 Reset ke Avatar Asli",
+    Callback = function()
+        resetAvatar()
     end,
 })
 
