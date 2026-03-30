@@ -22,13 +22,9 @@ local Window = Rayfield:CreateWindow({
 
 local Tab = Window:CreateTab("👤 Copy Avatar", 4483362458)
 
--- State
 local selectedPlayer = nil
 local searchResults = {}
 
--- =====================
--- Helper
--- =====================
 local function getPlayerNames()
     local list = {}
     for _, p in pairs(Players:GetPlayers()) do
@@ -71,28 +67,33 @@ local function copyAvatar(target)
         return
     end
 
+    -- ACCESSORIES - pakai nilai Position, Rotation, Scale ASLI dari target
     local accsData = {}
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
     if ok2 and accs then
         for _, acc in pairs(accs) do
+            local pos = acc.Position or vector.zero
+            local rot = acc.Rotation or vector.zero
+            local scl = acc.Scale or vector.one
+
             if acc.Order == nil then
                 table.insert(accsData, {
                     AssetId = acc.AssetId,
                     AccessoryType = acc.AccessoryType,
                     IsLayered = false,
-                    Position = vector.zero,
-                    Rotation = vector.zero,
-                    Scale = vector.one,
-                    Puffiness = 0,
+                    Position = pos,
+                    Rotation = rot,
+                    Scale = scl,
+                    Puffiness = acc.Puffiness or 0,
                 })
             else
                 table.insert(accsData, {
                     AssetId = acc.AssetId,
                     AccessoryType = acc.AccessoryType,
                     IsLayered = true,
-                    Position = vector.zero,
-                    Rotation = vector.zero,
-                    Scale = vector.one,
+                    Position = pos,
+                    Rotation = rot,
+                    Scale = scl,
                     Order = acc.Order,
                     Puffiness = acc.Puffiness or 0,
                 })
@@ -138,13 +139,9 @@ local function copyAvatar(target)
     end
 end
 
--- =====================
--- UI Sections
--- =====================
-
+-- UI
 Tab:CreateSection("🔍 Cari Pemain")
 
--- Search input — live update dropdown hasil
 local resultDropdown
 local lastSearch = ""
 
@@ -156,10 +153,9 @@ Tab:CreateInput({
         lastSearch = value
         local results = searchPlayers(value)
         searchResults = results
-
         if #results == 0 then
-            resultDropdown:Set("Tidak ada hasil")
             resultDropdown:Refresh({"Tidak ada hasil"}, true)
+            resultDropdown:Set("Tidak ada hasil")
         else
             resultDropdown:Refresh(results, true)
             resultDropdown:Set(results[1])
@@ -168,7 +164,6 @@ Tab:CreateInput({
     end,
 })
 
--- Dropdown hasil search
 resultDropdown = Tab:CreateDropdown({
     Name = "📋 Hasil Pencarian",
     Options = getPlayerNames(),
@@ -191,7 +186,6 @@ resultDropdown = Tab:CreateDropdown({
 
 Tab:CreateSection("⚙️ Actions")
 
--- Refresh semua pemain
 Tab:CreateButton({
     Name = "🔄 Refresh Daftar Pemain",
     Callback = function()
@@ -210,7 +204,6 @@ Tab:CreateButton({
     end,
 })
 
--- Tombol copy
 Tab:CreateButton({
     Name = "✅ Copy Avatar",
     Callback = function()
@@ -227,11 +220,10 @@ Tab:CreateButton({
     end,
 })
 
--- Auto update saat pemain join/keluar
 Players.PlayerAdded:Connect(function()
     task.wait(1)
-    local list = getPlayerNames()
     if lastSearch == "" then
+        local list = getPlayerNames()
         resultDropdown:Refresh(list, true)
     end
 end)
@@ -241,13 +233,12 @@ Players.PlayerRemoving:Connect(function(p)
     if selectedPlayer and selectedPlayer == p then
         selectedPlayer = nil
     end
-    local list = getPlayerNames()
     if lastSearch == "" then
+        local list = getPlayerNames()
         resultDropdown:Refresh(list, true)
     end
 end)
 
--- Init dropdown dengan semua pemain
 local initList = getPlayerNames()
 if #initList > 0 then
     selectedPlayer = Players:FindFirstChild(initList[1])
