@@ -1,14 +1,11 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa
+-- By Only Gataa (V4 Clean)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
-local BloxbizRemotes = RS:WaitForChild("BloxbizRemotes")
-local ApplyOutfit = BloxbizRemotes:WaitForChild("CatalogOnApplyOutfit")
-
--- Load Rayfield
+local ApplyOutfit = RS:WaitForChild("BloxbizRemotes"):WaitForChild("CatalogOnApplyOutfit")
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
 local Window = Rayfield:CreateWindow({
@@ -21,45 +18,39 @@ local Window = Rayfield:CreateWindow({
 })
 
 local Tab = Window:CreateTab("👤 Copy Avatar", 4483362458)
-
 local selectedPlayer = nil
-local searchResults = {}
+local lastSearch = ""
 
 local function getPlayerNames()
     local list = {}
     for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer then
-            table.insert(list, p.Name)
-        end
+        if p ~= LocalPlayer then table.insert(list, p.Name) end
     end
     return list
 end
 
 local function searchPlayers(query)
     local results = {}
-    query = query:lower()
     for _, p in pairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Name:lower():find(query, 1, true) then
+        if p ~= LocalPlayer and p.Name:lower():find(query:lower(), 1, true) then
             table.insert(results, p.Name)
         end
     end
     return results
 end
 
+local function extractId(str)
+    local id = tostring(str or ""):match("%d+")
+    return id and tonumber(id) or 0
+end
+
 local function copyAvatar(target)
-    if not target then
-        Rayfield:Notify({ Title = "❌ Error", Content = "Pemain tidak ditemukan!", Duration = 3, Image = 4483362458 })
+    local char = target and target.Character
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then
+        Rayfield:Notify({ Title = "❌ Error", Content = "Karakter tidak ditemukan!", Duration = 3, Image = 4483362458 })
         return
     end
-
-    local char = target.Character
-    if not char then
-        Rayfield:Notify({ Title = "❌ Error", Content = "Karakter " .. target.Name .. " tidak ditemukan!", Duration = 3, Image = 4483362458 })
-        return
-    end
-
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return end
 
     local ok, d = pcall(function() return hum:GetAppliedDescription() end)
     if not ok or not d then
@@ -67,47 +58,115 @@ local function copyAvatar(target)
         return
     end
 
-    -- ACCESSORIES - pakai nilai Position, Rotation, Scale ASLI dari target
+    -- ✅ Aksesoris dari GetAccessories
     local accsData = {}
+    local addedIds = {}
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
     if ok2 and accs then
         for _, acc in pairs(accs) do
-            local pos = acc.Position or vector.zero
-            local rot = acc.Rotation or vector.zero
-            local scl = acc.Scale or vector.one
+            if acc.AssetId ~= 0 and not addedIds[acc.AssetId] then
+                addedIds[acc.AssetId] = true
+                local entry = {
+                    AssetId = acc.AssetId,
+                    AccessoryType = acc.AccessoryType,
+                    IsLayered = acc.Order ~= nil,
+                    Position = acc.Position or Vector3.new(0,0,0),
+                    Rotation = acc.Rotation or Vector3.new(0,0,0),
+                    Scale = acc.Scale or Vector3.new(1,1,1),
+                    Puffiness = acc.Puffiness or 0,
+                }
+                if acc.Order then entry.Order = acc.Order end
+                table.insert(accsData, entry)
+            end
+        end
+    end
 
-            if acc.Order == nil then
+    -- ✅ Fallback: scan Accessory langsung dari karakter
+    for _, obj in pairs(char:GetDescendants()) do
+        if obj:IsA("Accessory") then
+            local handle = obj:FindFirstChild("Handle")
+            local mesh = handle and handle:FindFirstChildOfClass("SpecialMesh")
+            local id = mesh and extractId(mesh.MeshId) or 0
+            if id == 0 and mesh then id = extractId(mesh.TextureId) end
+
+            if id ~= 0 and not addedIds[id] then
+                addedIds[id] = true
+                local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
+                local pos, rot = Vector3.new(0,0,0), Vector3.new(0,0,0)
+                if weld then
+                    pos = weld.C0.Position
+                    local rx, ry, rz = weld.C0:ToEulerAnglesXYZ()
+                    rot = Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
+                end
                 table.insert(accsData, {
-                    AssetId = acc.AssetId,
-                    AccessoryType = acc.AccessoryType,
+                    AssetId = id,
+                    AccessoryType = Enum.AccessoryType.Hat,
                     IsLayered = false,
-                    Position = pos,
-                    Rotation = rot,
-                    Scale = scl,
-                    Puffiness = acc.Puffiness or 0,
-                })
-            else
-                table.insert(accsData, {
-                    AssetId = acc.AssetId,
-                    AccessoryType = acc.AccessoryType,
-                    IsLayered = true,
-                    Position = pos,
-                    Rotation = rot,
-                    Scale = scl,
-                    Order = acc.Order,
-                    Puffiness = acc.Puffiness or 0,
+                    Position = pos, Rotation = rot,
+                    Scale = handle.Size or Vector3.new(1,1,1),
+                    Puffiness = 0,
                 })
             end
         end
     end
 
+    -- ✅ Fallback Shirt/Pants/Face jika desc kosong
+    local shirtId = d.Shirt == 0 and extractId((char:FindFirstChildOfClass("Shirt") or {}).ShirtTemplate) or d.Shirt
+    local pantsId = d.Pants == 0 and extractId((char:FindFirstChildOfClass("Pants") or {}).PantsTemplate) or d.Pants
+    local faceId  = d.Face
+    if faceId == 0 then
+        local decal = char:FindFirstChild("Head") and char.Head:FindFirstChildOfClass("Decal")
+        if decal then faceId = extractId(decal.Texture) end
+    end
+
+    -- ✅ Clone Face & Aksesoris langsung (untuk yang tidak ke-apply via FireServer)
+    local dstChar = LocalPlayer.Character
+    if dstChar then
+        -- Face
+        local dstHead = dstChar:FindFirstChild("Head")
+        local srcHead = char:FindFirstChild("Head")
+        if dstHead and srcHead then
+            for _, v in pairs(dstHead:GetChildren()) do
+                if v:IsA("Decal") then v:Destroy() end
+            end
+            for _, v in pairs(srcHead:GetChildren()) do
+                if v:IsA("Decal") then v:Clone().Parent = dstHead end
+            end
+        end
+
+        -- Aksesoris & Jacket (WrapLayer)
+        for _, v in pairs(dstChar:GetChildren()) do
+            if v:IsA("Accessory") then v:Destroy() end
+        end
+        for _, obj in pairs(char:GetChildren()) do
+            if obj:IsA("Accessory") then
+                local newAcc = obj:Clone()
+                local handle = newAcc:FindFirstChild("Handle")
+                local srcHandle = obj:FindFirstChild("Handle")
+                if handle and srcHandle then
+                    local srcWeld = srcHandle:FindFirstChild("AccessoryWeld") or srcHandle:FindFirstChildOfClass("Weld")
+                    if srcWeld and srcWeld.Part1 then
+                        local newWeld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
+                        local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
+                        if newWeld and targetPart then
+                            newWeld.Part0 = handle
+                            newWeld.Part1 = targetPart
+                        end
+                    end
+                end
+                newAcc.Parent = dstChar
+            end
+        end
+    end
+
+    -- FireServer
     local fireOk, fireErr = pcall(function()
         ApplyOutfit:FireServer({
             Head = d.Head, Torso = d.Torso,
             LeftArm = d.LeftArm, RightArm = d.RightArm,
             LeftLeg = d.LeftLeg, RightLeg = d.RightLeg,
-            Shirt = d.Shirt, Pants = d.Pants,
-            GraphicTShirt = d.GraphicTShirt, Face = d.Face,
+            Shirt = shirtId, Pants = pantsId,
+            GraphicTShirt = d.GraphicTShirt, Face = faceId,
             HeadColor = d.HeadColor, TorsoColor = d.TorsoColor,
             LeftArmColor = d.LeftArmColor, RightArmColor = d.RightArmColor,
             LeftLegColor = d.LeftLegColor, RightLegColor = d.RightLegColor,
@@ -122,28 +181,20 @@ local function copyAvatar(target)
         })
     end)
 
-    if fireOk then
-        Rayfield:Notify({
-            Title = "✅ Berhasil!",
-            Content = "Avatar " .. target.Name .. " dicopy! (" .. #accsData .. " accessories)",
-            Duration = 4,
-            Image = 4483362458,
-        })
-    else
-        Rayfield:Notify({
-            Title = "❌ Gagal",
-            Content = tostring(fireErr),
-            Duration = 4,
-            Image = 4483362458,
-        })
-    end
+    Rayfield:Notify({
+        Title = fireOk and "✅ Berhasil!" or "⚠️ Partial",
+        Content = fireOk
+            and ("Avatar " .. target.Name .. " dicopy! (" .. #accsData .. " acc)")
+            or tostring(fireErr):sub(1, 60),
+        Duration = 4,
+        Image = 4483362458,
+    })
 end
 
 -- UI
 Tab:CreateSection("🔍 Cari Pemain")
 
 local resultDropdown
-local lastSearch = ""
 
 Tab:CreateInput({
     Name = "Search Username",
@@ -152,7 +203,6 @@ Tab:CreateInput({
     Callback = function(value)
         lastSearch = value
         local results = searchPlayers(value)
-        searchResults = results
         if #results == 0 then
             resultDropdown:Refresh({"Tidak ada hasil"}, true)
             resultDropdown:Set("Tidak ada hasil")
@@ -174,12 +224,7 @@ resultDropdown = Tab:CreateDropdown({
         local name = type(value) == "table" and value[1] or value
         selectedPlayer = Players:FindFirstChild(name)
         if selectedPlayer then
-            Rayfield:Notify({
-                Title = "Dipilih",
-                Content = "✔ " .. name,
-                Duration = 2,
-                Image = 4483362458,
-            })
+            Rayfield:Notify({ Title = "Dipilih", Content = "✔ " .. name, Duration = 2, Image = 4483362458 })
         end
     end,
 })
@@ -195,12 +240,7 @@ Tab:CreateButton({
             resultDropdown:Set(list[1])
             selectedPlayer = Players:FindFirstChild(list[1])
         end
-        Rayfield:Notify({
-            Title = "🔄 Refresh",
-            Content = #list .. " pemain ditemukan di server",
-            Duration = 2,
-            Image = 4483362458,
-        })
+        Rayfield:Notify({ Title = "🔄 Refresh", Content = #list .. " pemain ditemukan", Duration = 2, Image = 4483362458 })
     end,
 })
 
@@ -208,12 +248,7 @@ Tab:CreateButton({
     Name = "✅ Copy Avatar",
     Callback = function()
         if not selectedPlayer then
-            Rayfield:Notify({
-                Title = "❌ Belum Pilih",
-                Content = "Cari dan pilih pemain dulu!",
-                Duration = 3,
-                Image = 4483362458,
-            })
+            Rayfield:Notify({ Title = "❌", Content = "Pilih pemain dulu!", Duration = 3, Image = 4483362458 })
             return
         end
         copyAvatar(selectedPlayer)
@@ -222,26 +257,16 @@ Tab:CreateButton({
 
 Players.PlayerAdded:Connect(function()
     task.wait(1)
-    if lastSearch == "" then
-        local list = getPlayerNames()
-        resultDropdown:Refresh(list, true)
-    end
+    if lastSearch == "" then resultDropdown:Refresh(getPlayerNames(), true) end
 end)
 
 Players.PlayerRemoving:Connect(function(p)
     task.wait(0.5)
-    if selectedPlayer and selectedPlayer == p then
-        selectedPlayer = nil
-    end
-    if lastSearch == "" then
-        local list = getPlayerNames()
-        resultDropdown:Refresh(list, true)
-    end
+    if selectedPlayer == p then selectedPlayer = nil end
+    if lastSearch == "" then resultDropdown:Refresh(getPlayerNames(), true) end
 end)
 
 local initList = getPlayerNames()
-if #initList > 0 then
-    selectedPlayer = Players:FindFirstChild(initList[1])
-end
+if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar By Only Gataa loaded!")
+print("✅ Copy Avatar V4 Clean By Only Gataa loaded!")
