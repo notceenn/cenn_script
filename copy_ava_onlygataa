@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V4 Clean)
+-- By Only Gataa (V5 - Save Original Avatar)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -20,6 +20,38 @@ local Window = Rayfield:CreateWindow({
 local Tab = Window:CreateTab("👤 Copy Avatar", 4483362458)
 local selectedPlayer = nil
 local lastSearch = ""
+
+-- ✅ Simpan avatar asli saat script load
+local originalDescription = nil
+local originalAccs = {}
+
+task.spawn(function()
+    local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
+    local hum = char:WaitForChild("Humanoid")
+    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
+    if ok and d then
+        originalDescription = d
+        local ok2, accs = pcall(function() return d:GetAccessories(true) end)
+        if ok2 and accs then
+            for _, acc in pairs(accs) do
+                if acc.AssetId ~= 0 then
+                    local entry = {
+                        AssetId = acc.AssetId,
+                        AccessoryType = acc.AccessoryType,
+                        IsLayered = acc.Order ~= nil,
+                        Position = acc.Position or Vector3.new(0,0,0),
+                        Rotation = acc.Rotation or Vector3.new(0,0,0),
+                        Scale = acc.Scale or Vector3.new(1,1,1),
+                        Puffiness = acc.Puffiness or 0,
+                    }
+                    if acc.Order then entry.Order = acc.Order end
+                    table.insert(originalAccs, entry)
+                end
+            end
+        end
+        print("✅ Avatar asli tersimpan!")
+    end
+end)
 
 local function getPlayerNames()
     local list = {}
@@ -44,7 +76,7 @@ local function extractId(str)
     return id and tonumber(id) or 0
 end
 
-local function applyDescription(d, accsData, char)
+local function applyDescription(d, accsData)
     local fireOk, fireErr = pcall(function()
         ApplyOutfit:FireServer({
             Head = d.Head, Torso = d.Torso,
@@ -133,7 +165,7 @@ local function copyAvatar(target)
 
     local shirtId = d.Shirt == 0 and extractId((char:FindFirstChildOfClass("Shirt") or {}).ShirtTemplate) or d.Shirt
     local pantsId = d.Pants == 0 and extractId((char:FindFirstChildOfClass("Pants") or {}).PantsTemplate) or d.Pants
-    local faceId  = d.Face
+    local faceId = d.Face
     if faceId == 0 then
         local decal = char:FindFirstChild("Head") and char.Head:FindFirstChildOfClass("Decal")
         if decal then faceId = extractId(decal.Texture) end
@@ -143,7 +175,7 @@ local function copyAvatar(target)
     d.Pants = pantsId
     d.Face = faceId
 
-    local fireOk, fireErr = applyDescription(d, accsData, char)
+    local fireOk, fireErr = applyDescription(d, accsData)
 
     task.wait(1)
     local dstChar = LocalPlayer.Character
@@ -198,35 +230,13 @@ local function copyAvatar(target)
 end
 
 local function resetAvatar()
-    local ok, d = pcall(function()
-        return Players:GetHumanoidDescriptionFromUserId(LocalPlayer.UserId)
-    end)
-    if not ok or not d then
-        Rayfield:Notify({ Title = "❌ Error", Content = "Gagal ambil avatar asli!", Duration = 3, Image = 4483362458 })
+    -- ✅ Pakai avatar yang disimpan saat load, bukan dari catalog
+    if not originalDescription then
+        Rayfield:Notify({ Title = "❌ Error", Content = "Avatar asli belum tersimpan!", Duration = 3, Image = 4483362458 })
         return
     end
 
-    local accsData = {}
-    local ok2, accs = pcall(function() return d:GetAccessories(true) end)
-    if ok2 and accs then
-        for _, acc in pairs(accs) do
-            if acc.AssetId ~= 0 then
-                local entry = {
-                    AssetId = acc.AssetId,
-                    AccessoryType = acc.AccessoryType,
-                    IsLayered = acc.Order ~= nil,
-                    Position = acc.Position or Vector3.new(0,0,0),
-                    Rotation = acc.Rotation or Vector3.new(0,0,0),
-                    Scale = acc.Scale or Vector3.new(1,1,1),
-                    Puffiness = acc.Puffiness or 0,
-                }
-                if acc.Order then entry.Order = acc.Order end
-                table.insert(accsData, entry)
-            end
-        end
-    end
-
-    local fireOk, fireErr = applyDescription(d, accsData)
+    local fireOk, fireErr = applyDescription(originalDescription, originalAccs)
 
     task.wait(1)
     local dstChar = LocalPlayer.Character
@@ -239,7 +249,7 @@ local function resetAvatar()
         until not found
 
         local hum = dstChar:FindFirstChildOfClass("Humanoid")
-        if hum then hum:ApplyDescription(d) end
+        if hum then hum:ApplyDescription(originalDescription) end
     end
 
     Rayfield:Notify({
@@ -335,4 +345,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V4 Clean By Only Gataa loaded!")
+print("✅ Copy Avatar V5 By Only Gataa loaded!")
