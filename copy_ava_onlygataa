@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V5 - Save Original Avatar)
+-- By Only Gataa (V6 - Fix Layered Order)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -24,6 +24,7 @@ local lastSearch = ""
 -- ✅ Simpan avatar asli saat script load
 local originalDescription = nil
 local originalAccs = {}
+local originalCharAccs = {}
 
 task.spawn(function()
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -33,6 +34,7 @@ task.spawn(function()
         originalDescription = d
         local ok2, accs = pcall(function() return d:GetAccessories(true) end)
         if ok2 and accs then
+            table.sort(accs, function(a, b) return (a.Order or 0) < (b.Order or 0) end)
             for _, acc in pairs(accs) do
                 if acc.AssetId ~= 0 then
                     local entry = {
@@ -43,13 +45,27 @@ task.spawn(function()
                         Rotation = acc.Rotation or Vector3.new(0,0,0),
                         Scale = acc.Scale or Vector3.new(1,1,1),
                         Puffiness = acc.Puffiness or 0,
+                        Order = acc.Order,
                     }
-                    if acc.Order then entry.Order = acc.Order end
                     table.insert(originalAccs, entry)
                 end
             end
         end
-        print("✅ Avatar asli tersimpan!")
+        for _, obj in pairs(char:GetChildren()) do
+            if obj:IsA("Accessory") then
+                table.insert(originalCharAccs, obj:Clone())
+            end
+        end
+        local head = char:FindFirstChild("Head")
+        if head then
+            originalDescription._faceDecals = {}
+            for _, v in pairs(head:GetChildren()) do
+                if v:IsA("Decal") then
+                    table.insert(originalDescription._faceDecals, v:Clone())
+                end
+            end
+        end
+        print("✅ Avatar asli tersimpan! Acc:", #originalCharAccs)
     end
 end)
 
@@ -100,6 +116,45 @@ local function applyDescription(d, accsData)
     return fireOk, fireErr
 end
 
+local function cloneAccsToChar(srcList, dstChar)
+    repeat
+        local found = false
+        for _, v in pairs(dstChar:GetChildren()) do
+            if v:IsA("Accessory") then v:Destroy() found = true end
+        end
+    until not found
+
+    for _, obj in pairs(srcList) do
+        if obj:IsA("Accessory") then
+            local newAcc = obj:Clone()
+            local handle = newAcc:FindFirstChild("Handle")
+            local srcHandle = obj:FindFirstChild("Handle")
+            if handle and srcHandle then
+                local srcWeld = srcHandle:FindFirstChild("AccessoryWeld") or srcHandle:FindFirstChildOfClass("Weld")
+                if srcWeld and srcWeld.Part1 then
+                    local newWeld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
+                    local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
+                    if newWeld and targetPart then
+                        newWeld.Part0 = handle
+                        newWeld.Part1 = targetPart
+                    end
+                end
+            end
+            newAcc.Parent = dstChar
+        end
+    end
+end
+
+local function cloneFaceToChar(srcList, dstHead)
+    if not srcList or not dstHead then return end
+    for _, v in pairs(dstHead:GetChildren()) do
+        if v:IsA("Decal") then v:Destroy() end
+    end
+    for _, v in pairs(srcList) do
+        if v:IsA("Decal") then v:Clone().Parent = dstHead end
+    end
+end
+
 local function copyAvatar(target)
     local char = target and target.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -118,6 +173,8 @@ local function copyAvatar(target)
     local addedIds = {}
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
     if ok2 and accs then
+        -- ✅ Sort by Order untuk pastikan urutan layered clothing benar
+        table.sort(accs, function(a, b) return (a.Order or 0) < (b.Order or 0) end)
         for _, acc in pairs(accs) do
             if acc.AssetId ~= 0 and not addedIds[acc.AssetId] then
                 addedIds[acc.AssetId] = true
@@ -129,8 +186,8 @@ local function copyAvatar(target)
                     Rotation = acc.Rotation or Vector3.new(0,0,0),
                     Scale = acc.Scale or Vector3.new(1,1,1),
                     Puffiness = acc.Puffiness or 0,
+                    Order = acc.Order, -- ✅ Selalu kirim Order
                 }
-                if acc.Order then entry.Order = acc.Order end
                 table.insert(accsData, entry)
             end
         end
@@ -170,7 +227,6 @@ local function copyAvatar(target)
         local decal = char:FindFirstChild("Head") and char.Head:FindFirstChildOfClass("Decal")
         if decal then faceId = extractId(decal.Texture) end
     end
-
     d.Shirt = shirtId
     d.Pants = pantsId
     d.Face = faceId
@@ -180,43 +236,11 @@ local function copyAvatar(target)
     task.wait(1)
     local dstChar = LocalPlayer.Character
     if dstChar then
-        repeat
-            local found = false
-            for _, v in pairs(dstChar:GetChildren()) do
-                if v:IsA("Accessory") then v:Destroy() found = true end
-            end
-        until not found
-
-        local dstHead = dstChar:FindFirstChild("Head")
-        local srcHead = char:FindFirstChild("Head")
-        if dstHead and srcHead then
-            for _, v in pairs(dstHead:GetChildren()) do
-                if v:IsA("Decal") then v:Destroy() end
-            end
-            for _, v in pairs(srcHead:GetChildren()) do
-                if v:IsA("Decal") then v:Clone().Parent = dstHead end
-            end
-        end
-
-        for _, obj in pairs(char:GetChildren()) do
-            if obj:IsA("Accessory") then
-                local newAcc = obj:Clone()
-                local handle = newAcc:FindFirstChild("Handle")
-                local srcHandle = obj:FindFirstChild("Handle")
-                if handle and srcHandle then
-                    local srcWeld = srcHandle:FindFirstChild("AccessoryWeld") or srcHandle:FindFirstChildOfClass("Weld")
-                    if srcWeld and srcWeld.Part1 then
-                        local newWeld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
-                        local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
-                        if newWeld and targetPart then
-                            newWeld.Part0 = handle
-                            newWeld.Part1 = targetPart
-                        end
-                    end
-                end
-                newAcc.Parent = dstChar
-            end
-        end
+        cloneAccsToChar(char:GetChildren(), dstChar)
+        cloneFaceToChar(
+            char:FindFirstChild("Head") and char.Head:GetChildren() or {},
+            dstChar:FindFirstChild("Head")
+        )
     end
 
     Rayfield:Notify({
@@ -230,7 +254,6 @@ local function copyAvatar(target)
 end
 
 local function resetAvatar()
-    -- ✅ Pakai avatar yang disimpan saat load, bukan dari catalog
     if not originalDescription then
         Rayfield:Notify({ Title = "❌ Error", Content = "Avatar asli belum tersimpan!", Duration = 3, Image = 4483362458 })
         return
@@ -241,15 +264,8 @@ local function resetAvatar()
     task.wait(1)
     local dstChar = LocalPlayer.Character
     if dstChar then
-        repeat
-            local found = false
-            for _, v in pairs(dstChar:GetChildren()) do
-                if v:IsA("Accessory") then v:Destroy() found = true end
-            end
-        until not found
-
-        local hum = dstChar:FindFirstChildOfClass("Humanoid")
-        if hum then hum:ApplyDescription(originalDescription) end
+        cloneAccsToChar(originalCharAccs, dstChar)
+        cloneFaceToChar(originalDescription._faceDecals, dstChar:FindFirstChild("Head"))
     end
 
     Rayfield:Notify({
@@ -345,4 +361,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V5 By Only Gataa loaded!")
+print("✅ Copy Avatar V6 By Only Gataa loaded!")
