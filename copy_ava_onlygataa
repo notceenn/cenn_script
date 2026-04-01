@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V9)
+-- By Only Gataa (V11)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -23,7 +23,6 @@ local lastSearch = ""
 
 local originalDescription = nil
 local originalAccs = {}
-local originalCharAccs = {}
 
 task.spawn(function()
     local char = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
@@ -49,11 +48,6 @@ task.spawn(function()
                 end
             end
         end
-        for _, obj in pairs(char:GetChildren()) do
-            if obj:IsA("Accessory") then
-                table.insert(originalCharAccs, obj:Clone())
-            end
-        end
         local head = char:FindFirstChild("Head")
         if head then
             originalDescription._faceDecals = {}
@@ -63,7 +57,7 @@ task.spawn(function()
                 end
             end
         end
-        print("✅ Avatar asli tersimpan! Acc:", #originalCharAccs)
+        print("✅ Avatar asli tersimpan!")
     end
 end)
 
@@ -121,29 +115,6 @@ local function cloneFaceToChar(srcList, dstHead)
     end
     for _, v in pairs(srcList) do
         if v:IsA("Decal") then v:Clone().Parent = dstHead end
-    end
-end
-
-local function cloneNonLayeredAccs(srcList, dstChar)
-    for _, obj in pairs(srcList) do
-        if obj:IsA("Accessory") then
-            local handle = obj:FindFirstChild("Handle")
-            local isLayered = handle and (handle:FindFirstChildOfClass("WrapLayer") ~= nil)
-            if not isLayered then
-                local newAcc = obj:Clone()
-                local newHandle = newAcc:FindFirstChild("Handle")
-                local srcWeld = handle and (handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld"))
-                if newHandle and srcWeld and srcWeld.Part1 then
-                    local newWeld = newHandle:FindFirstChild("AccessoryWeld") or newHandle:FindFirstChildOfClass("Weld")
-                    local targetPart = dstChar:FindFirstChild(srcWeld.Part1.Name)
-                    if newWeld and targetPart then
-                        newWeld.Part0 = newHandle
-                        newWeld.Part1 = targetPart
-                    end
-                end
-                newAcc.Parent = dstChar
-            end
-        end
     end
 end
 
@@ -221,26 +192,18 @@ local function copyAvatar(target)
     d.Pants = pantsId
     d.Face = faceId
 
-    -- ✅ Hapus SEMUA aksesoris lama dulu sebelum FireServer
-    local dstChar = LocalPlayer.Character
-    if dstChar then
-        repeat
-            local found = false
-            for _, v in pairs(dstChar:GetChildren()) do
-                if v:IsA("Accessory") then v:Destroy() found = true end
-            end
-        until not found
-    end
-
     local fireOk, fireErr = applyDescription(d, accsData)
 
-    -- ✅ Tunggu server selesai apply
     task.wait(2)
 
-    dstChar = LocalPlayer.Character
+    local dstChar = LocalPlayer.Character
     if dstChar then
-        task.wait(0.5)
-        cloneNonLayeredAccs(char:GetChildren(), dstChar)
+        -- ✅ Apply description ke humanoid lokal untuk view sendiri
+        local dstHum = dstChar:FindFirstChildOfClass("Humanoid")
+        if dstHum then
+            pcall(function() dstHum:ApplyDescription(d) end)
+        end
+        -- ✅ Clone face saja
         cloneFaceToChar(
             char:FindFirstChild("Head") and char.Head:GetChildren() or {},
             dstChar:FindFirstChild("Head")
@@ -263,24 +226,16 @@ local function resetAvatar()
         return
     end
 
-    local dstChar = LocalPlayer.Character
-    if dstChar then
-        repeat
-            local found = false
-            for _, v in pairs(dstChar:GetChildren()) do
-                if v:IsA("Accessory") then v:Destroy() found = true end
-            end
-        until not found
-    end
-
     local fireOk, fireErr = applyDescription(originalDescription, originalAccs)
 
     task.wait(2)
 
-    dstChar = LocalPlayer.Character
+    local dstChar = LocalPlayer.Character
     if dstChar then
-        task.wait(0.5)
-        cloneNonLayeredAccs(originalCharAccs, dstChar)
+        local dstHum = dstChar:FindFirstChildOfClass("Humanoid")
+        if dstHum then
+            pcall(function() dstHum:ApplyDescription(originalDescription) end)
+        end
         cloneFaceToChar(originalDescription._faceDecals, dstChar:FindFirstChild("Head"))
     end
 
@@ -377,4 +332,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V9 By Only Gataa loaded!")
+print("✅ Copy Avatar V11 By Only Gataa loaded!")
