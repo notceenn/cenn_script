@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V11)
+-- By Only Gataa (V12 - Fixed Accessories)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -118,6 +118,42 @@ local function cloneFaceToChar(srcList, dstHead)
     end
 end
 
+-- ✅ FIXED: Ambil aksesori langsung dari HumanoidDescription dengan benar
+local function getAccsFromDescription(char, hum)
+    local accsData = {}
+    local addedIds = {}
+
+    -- Prioritas 1: Dari GetAppliedDescription (paling akurat untuk layered)
+    local ok, d = pcall(function() return hum:GetAppliedDescription() end)
+    if ok and d then
+        local ok2, accs = pcall(function() return d:GetAccessories(true) end)
+        if ok2 and accs then
+            -- Sort by Order agar urutan layered clothing benar
+            table.sort(accs, function(a, b)
+                return (a.Order or 0) < (b.Order or 0)
+            end)
+            for _, acc in pairs(accs) do
+                if acc.AssetId ~= 0 and not addedIds[acc.AssetId] then
+                    addedIds[acc.AssetId] = true
+                    table.insert(accsData, {
+                        AssetId = acc.AssetId,
+                        AccessoryType = acc.AccessoryType,
+                        IsLayered = acc.Order ~= nil and acc.Order ~= 0,
+                        -- ✅ Gunakan default Vector3 agar posisi mengikuti rig otomatis
+                        Position = Vector3.new(0, 0, 0),
+                        Rotation = Vector3.new(0, 0, 0),
+                        Scale = Vector3.new(1, 1, 1),
+                        Puffiness = acc.Puffiness or 0,
+                        Order = acc.Order or 0,
+                    })
+                end
+            end
+        end
+        return accsData, d
+    end
+    return accsData, nil
+end
+
 local function copyAvatar(target)
     local char = target and target.Character
     local hum = char and char:FindFirstChildOfClass("Humanoid")
@@ -132,27 +168,12 @@ local function copyAvatar(target)
         return
     end
 
-    local accsData = {}
+    -- ✅ FIXED: Pakai fungsi baru yang tidak override posisi dari weld
+    local accsData, _ = getAccsFromDescription(char, hum)
+
+    -- Fallback: cari aksesori fisik di karakter yang tidak tertangkap description
     local addedIds = {}
-    local ok2, accs = pcall(function() return d:GetAccessories(true) end)
-    if ok2 and accs then
-        table.sort(accs, function(a, b) return (a.Order or 0) < (b.Order or 0) end)
-        for _, acc in pairs(accs) do
-            if acc.AssetId ~= 0 and not addedIds[acc.AssetId] then
-                addedIds[acc.AssetId] = true
-                table.insert(accsData, {
-                    AssetId = acc.AssetId,
-                    AccessoryType = acc.AccessoryType,
-                    IsLayered = acc.Order ~= nil,
-                    Position = acc.Position or Vector3.new(0,0,0),
-                    Rotation = acc.Rotation or Vector3.new(0,0,0),
-                    Scale = acc.Scale or Vector3.new(1,1,1),
-                    Puffiness = acc.Puffiness or 0,
-                    Order = acc.Order,
-                })
-            end
-        end
-    end
+    for _, a in pairs(accsData) do addedIds[a.AssetId] = true end
 
     for _, obj in pairs(char:GetDescendants()) do
         if obj:IsA("Accessory") then
@@ -162,25 +183,22 @@ local function copyAvatar(target)
             if id == 0 and mesh then id = extractId(mesh.TextureId) end
             if id ~= 0 and not addedIds[id] then
                 addedIds[id] = true
-                local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
-                local pos, rot = Vector3.new(0,0,0), Vector3.new(0,0,0)
-                if weld then
-                    pos = weld.C0.Position
-                    local rx, ry, rz = weld.C0:ToEulerAnglesXYZ()
-                    rot = Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
-                end
                 table.insert(accsData, {
                     AssetId = id,
                     AccessoryType = Enum.AccessoryType.Hat,
                     IsLayered = false,
-                    Position = pos, Rotation = rot,
-                    Scale = handle.Size or Vector3.new(1,1,1),
+                    -- ✅ Posisi default, jangan ambil dari weld (menyebabkan offset salah)
+                    Position = Vector3.new(0, 0, 0),
+                    Rotation = Vector3.new(0, 0, 0),
+                    Scale = Vector3.new(1, 1, 1),
                     Puffiness = 0,
+                    Order = 0,
                 })
             end
         end
     end
 
+    -- Ambil shirt/pants/face
     local shirtId = d.Shirt == 0 and extractId((char:FindFirstChildOfClass("Shirt") or {}).ShirtTemplate) or d.Shirt
     local pantsId = d.Pants == 0 and extractId((char:FindFirstChildOfClass("Pants") or {}).PantsTemplate) or d.Pants
     local faceId = d.Face
@@ -196,14 +214,37 @@ local function copyAvatar(target)
 
     task.wait(2)
 
+    -- ✅ Apply ke humanoid lokal
     local dstChar = LocalPlayer.Character
     if dstChar then
-        -- ✅ Apply description ke humanoid lokal untuk view sendiri
         local dstHum = dstChar:FindFirstChildOfClass("Humanoid")
         if dstHum then
-            pcall(function() dstHum:ApplyDescription(d) end)
+            -- ✅ Clone description target langsung ke humanoid lokal
+            local clonedDesc = d:Clone()
+            -- Hapus aksesori lama dari description clone, lalu apply
+            pcall(function()
+                local ok3, newAccList = pcall(function() return clonedDesc:GetAccessories(true) end)
+                -- Kosongkan dulu
+                for _, acc in pairs(ok3 and newAccList or {}) do
+                    clonedDesc:RemoveAccessory(acc)
+                end
+                -- Tambah ulang dari accsData
+                for _, acc in pairs(accsData) do
+                    clonedDesc:AddAccessory({
+                        AssetId = acc.AssetId,
+                        AccessoryType = acc.AccessoryType,
+                        IsLayered = acc.IsLayered,
+                        Position = acc.Position,
+                        Rotation = acc.Rotation,
+                        Scale = acc.Scale,
+                        Puffiness = acc.Puffiness,
+                        Order = acc.Order,
+                    })
+                end
+            end)
+            pcall(function() dstHum:ApplyDescription(clonedDesc) end)
         end
-        -- ✅ Clone face saja
+        -- Clone face
         cloneFaceToChar(
             char:FindFirstChild("Head") and char.Head:GetChildren() or {},
             dstChar:FindFirstChild("Head")
@@ -332,4 +373,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V11 By Only Gataa loaded!")
+print("✅ Copy Avatar V12 By Only Gataa loaded!")
