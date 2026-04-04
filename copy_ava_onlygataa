@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V12 - Fixed Face Accessory Position)
+-- By Only Gataa (V13 - Scheduler Error Fixed)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -8,32 +8,14 @@ local LocalPlayer = Players.LocalPlayer
 local ApplyOutfit = RS:WaitForChild("BloxbizRemotes"):WaitForChild("CatalogOnApplyOutfit")
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
--- ✅ FIX: Daftar AccessoryType yang termasuk "face" / kepala
--- Aksesori ini TIDAK boleh pakai offset weld manual, harus pakai Vector3.zero
-local FACE_TYPES = {
-    [Enum.AccessoryType.Face] = true,
-    [Enum.AccessoryType.Hat] = false,  -- Hat boleh pakai weld offset
-    [Enum.AccessoryType.Hair] = false,
-    [Enum.AccessoryType.Front] = true,
-    [Enum.AccessoryType.Back] = false,
-    [Enum.AccessoryType.Waist] = false,
-    [Enum.AccessoryType.Shoulders] = false,
-    [Enum.AccessoryType.Neck] = false,
-}
+-- ✅ FIX: Cek face accessory dengan aman tanpa hardcode Enum yang mungkin tidak ada
+local function isFaceAccessory(accType)
+    local ok, faceEnum = pcall(function() return Enum.AccessoryType.Face end)
+    if ok and faceEnum and accType == faceEnum then return true end
 
--- ✅ FIX: Cek apakah nama aksesori kemungkinan adalah face accessory
-local function isFaceAccessory(accObj)
-    -- Cek via AccessoryType kalau ada
-    if accObj.AccessoryType then
-        if accObj.AccessoryType == Enum.AccessoryType.Face then
-            return true
-        end
-    end
-    -- Cek via nama objek (fallback)
-    local name = accObj.Name and accObj.Name:lower() or ""
-    if name:find("face") or name:find("tongue") or name:find("lid") or name:find("mouth") or name:find("nose") then
-        return true
-    end
+    local ok2, frontEnum = pcall(function() return Enum.AccessoryType.Front end)
+    if ok2 and frontEnum and accType == frontEnum then return true end
+
     return false
 end
 
@@ -164,7 +146,7 @@ local function copyAvatar(target)
     local accsData = {}
     local addedIds = {}
 
-    -- ✅ PRIORITAS 1: Ambil dari GetAccessories (paling akurat, sudah ada posisi benar)
+    -- Ambil dari GetAccessories (paling akurat)
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
     if ok2 and accs then
         table.sort(accs, function(a, b) return (a.Order or 0) < (b.Order or 0) end)
@@ -172,19 +154,16 @@ local function copyAvatar(target)
             if acc.AssetId ~= 0 and not addedIds[acc.AssetId] then
                 addedIds[acc.AssetId] = true
 
-                -- ✅ FIX: Untuk face accessories, paksa posisi & rotasi ke zero
-                -- supaya tidak offset ke bawah
-                local isFace = (acc.AccessoryType == Enum.AccessoryType.Face)
-                    or (acc.AccessoryType == Enum.AccessoryType.Front)
+                -- ✅ FIX: Face accessories paksa posisi zero pakai pcall aman
+                local isFA = isFaceAccessory(acc.AccessoryType)
 
                 table.insert(accsData, {
                     AssetId = acc.AssetId,
                     AccessoryType = acc.AccessoryType,
                     IsLayered = acc.Order ~= nil,
-                    -- ✅ FIX: Face accessories tidak butuh custom offset
-                    Position = isFace and Vector3.new(0, 0, 0) or (acc.Position or Vector3.new(0, 0, 0)),
-                    Rotation = isFace and Vector3.new(0, 0, 0) or (acc.Rotation or Vector3.new(0, 0, 0)),
-                    Scale = acc.Scale or Vector3.new(1, 1, 1),
+                    Position = isFA and Vector3.new(0,0,0) or (acc.Position or Vector3.new(0,0,0)),
+                    Rotation = isFA and Vector3.new(0,0,0) or (acc.Rotation or Vector3.new(0,0,0)),
+                    Scale = acc.Scale or Vector3.new(1,1,1),
                     Puffiness = acc.Puffiness or 0,
                     Order = acc.Order,
                 })
@@ -192,7 +171,7 @@ local function copyAvatar(target)
         end
     end
 
-    -- ✅ PRIORITAS 2: Fallback scan aksesori di karakter (untuk aksesori yang tidak terdeteksi)
+    -- Fallback scan aksesori di karakter
     for _, obj in pairs(char:GetDescendants()) do
         if obj:IsA("Accessory") then
             local handle = obj:FindFirstChild("Handle")
@@ -202,12 +181,13 @@ local function copyAvatar(target)
             if id ~= 0 and not addedIds[id] then
                 addedIds[id] = true
 
-                -- ✅ FIX: Cek apakah ini face accessory sebelum ambil weld offset
-                local faceAcc = isFaceAccessory(obj)
-                local pos, rot = Vector3.new(0, 0, 0), Vector3.new(0, 0, 0)
+                -- ✅ FIX: Cek nama objek untuk deteksi face accessory
+                local nameL = obj.Name:lower()
+                local isNamedFace = nameL:find("face") or nameL:find("tongue")
+                    or nameL:find("mouth") or nameL:find("nose") or nameL:find("lid")
 
-                if not faceAcc then
-                    -- Hanya ambil weld offset untuk non-face accessories
+                local pos, rot = Vector3.new(0,0,0), Vector3.new(0,0,0)
+                if not isNamedFace then
                     local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
                     if weld then
                         pos = weld.C0.Position
@@ -215,15 +195,19 @@ local function copyAvatar(target)
                         rot = Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
                     end
                 end
-                -- ✅ FIX: face accessory → pos & rot tetap Vector3.zero (tidak di-override)
+
+                -- ✅ AccessoryType untuk fallback: pakai Hat (aman, selalu ada)
+                local accType
+                local okHat, hatEnum = pcall(function() return Enum.AccessoryType.Hat end)
+                accType = (okHat and hatEnum) or Enum.AccessoryType.Hat
 
                 table.insert(accsData, {
                     AssetId = id,
-                    AccessoryType = faceAcc and Enum.AccessoryType.Face or Enum.AccessoryType.Hat,
+                    AccessoryType = accType,
                     IsLayered = false,
                     Position = pos,
                     Rotation = rot,
-                    Scale = handle.Size or Vector3.new(1, 1, 1),
+                    Scale = handle.Size or Vector3.new(1,1,1),
                     Puffiness = 0,
                 })
             end
@@ -379,4 +363,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V12 By Only Gataa loaded! (Fixed Face Accessory)")
+print("✅ Copy Avatar V13 By Only Gataa loaded! (Scheduler Error Fixed)")
