@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V13 - Scheduler Error Fixed)
+-- By Only Gataa (V14 - Face Accessory Attachment Fix)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -8,15 +8,50 @@ local LocalPlayer = Players.LocalPlayer
 local ApplyOutfit = RS:WaitForChild("BloxbizRemotes"):WaitForChild("CatalogOnApplyOutfit")
 local Rayfield = loadstring(game:HttpGet("https://sirius.menu/rayfield"))()
 
--- ✅ FIX: Cek face accessory dengan aman tanpa hardcode Enum yang mungkin tidak ada
-local function isFaceAccessory(accType)
-    local ok, faceEnum = pcall(function() return Enum.AccessoryType.Face end)
-    if ok and faceEnum and accType == faceEnum then return true end
-
-    local ok2, frontEnum = pcall(function() return Enum.AccessoryType.Front end)
-    if ok2 and frontEnum and accType == frontEnum then return true end
-
+-- ✅ Cek apakah AccessoryType adalah face-related (aman pakai pcall)
+local function isFaceType(accType)
+    local checks = {"Face", "Front", "Eyelash", "Eyebrow"}
+    for _, name in ipairs(checks) do
+        local ok, e = pcall(function() return Enum.AccessoryType[name] end)
+        if ok and e and accType == e then return true end
+    end
     return false
+end
+
+-- ✅ Cek nama objek apakah face accessory
+local function isFaceByName(name)
+    local n = (name or ""):lower()
+    return n:find("face") or n:find("tongue") or n:find("mouth")
+        or n:find("nose") or n:find("lid") or n:find("eyebrow")
+        or n:find("eyelash") or n:find("blush") or n:find("freckle")
+end
+
+-- ✅ Ambil posisi face accessory dari WorldCFrame attachment (paling akurat)
+local function getFaceAccTransform(accObj, srcHead)
+    if not srcHead then return Vector3.new(0,0,0), Vector3.new(0,0,0) end
+
+    local handle = accObj:FindFirstChild("Handle")
+    if not handle then return Vector3.new(0,0,0), Vector3.new(0,0,0) end
+
+    local handleAtt = handle:FindFirstChildOfClass("Attachment")
+    local headAtt = srcHead:FindFirstChild("FaceCenterAttachment")
+        or srcHead:FindFirstChild("FaceFrontAttachment")
+        or srcHead:FindFirstChildOfClass("Attachment")
+
+    if handleAtt and headAtt then
+        local relCF = headAtt.WorldCFrame:ToObjectSpace(handleAtt.WorldCFrame)
+        local rx, ry, rz = relCF:ToEulerAnglesXYZ()
+        return relCF.Position, Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
+    end
+
+    -- Fallback: pakai C1 dari weld (offset dari head, bukan dari handle)
+    local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
+    if weld then
+        local rx, ry, rz = weld.C1:ToEulerAnglesXYZ()
+        return weld.C1.Position, Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
+    end
+
+    return Vector3.new(0,0,0), Vector3.new(0,0,0)
 end
 
 local Window = Rayfield:CreateWindow({
@@ -143,10 +178,11 @@ local function copyAvatar(target)
         return
     end
 
+    local srcHead = char:FindFirstChild("Head")
     local accsData = {}
     local addedIds = {}
 
-    -- Ambil dari GetAccessories (paling akurat)
+    -- PRIORITAS 1: Dari GetAccessories
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
     if ok2 and accs then
         table.sort(accs, function(a, b) return (a.Order or 0) < (b.Order or 0) end)
@@ -154,15 +190,31 @@ local function copyAvatar(target)
             if acc.AssetId ~= 0 and not addedIds[acc.AssetId] then
                 addedIds[acc.AssetId] = true
 
-                -- ✅ FIX: Face accessories paksa posisi zero pakai pcall aman
-                local isFA = isFaceAccessory(acc.AccessoryType)
+                local isFA = isFaceType(acc.AccessoryType)
+                local pos = acc.Position or Vector3.new(0,0,0)
+                local rot = acc.Rotation or Vector3.new(0,0,0)
+
+                if isFA then
+                    -- ✅ Cari objek aksesori di karakter target berdasarkan AssetId
+                    for _, obj in pairs(char:GetDescendants()) do
+                        if obj:IsA("Accessory") then
+                            local handle = obj:FindFirstChild("Handle")
+                            local mesh = handle and handle:FindFirstChildOfClass("SpecialMesh")
+                            local meshId = mesh and extractId(mesh.MeshId) or 0
+                            if meshId == acc.AssetId then
+                                pos, rot = getFaceAccTransform(obj, srcHead)
+                                break
+                            end
+                        end
+                    end
+                end
 
                 table.insert(accsData, {
                     AssetId = acc.AssetId,
                     AccessoryType = acc.AccessoryType,
                     IsLayered = acc.Order ~= nil,
-                    Position = isFA and Vector3.new(0,0,0) or (acc.Position or Vector3.new(0,0,0)),
-                    Rotation = isFA and Vector3.new(0,0,0) or (acc.Rotation or Vector3.new(0,0,0)),
+                    Position = pos,
+                    Rotation = rot,
                     Scale = acc.Scale or Vector3.new(1,1,1),
                     Puffiness = acc.Puffiness or 0,
                     Order = acc.Order,
@@ -171,7 +223,7 @@ local function copyAvatar(target)
         end
     end
 
-    -- Fallback scan aksesori di karakter
+    -- PRIORITAS 2: Fallback scan Accessory objects
     for _, obj in pairs(char:GetDescendants()) do
         if obj:IsA("Accessory") then
             local handle = obj:FindFirstChild("Handle")
@@ -181,13 +233,12 @@ local function copyAvatar(target)
             if id ~= 0 and not addedIds[id] then
                 addedIds[id] = true
 
-                -- ✅ FIX: Cek nama objek untuk deteksi face accessory
-                local nameL = obj.Name:lower()
-                local isNamedFace = nameL:find("face") or nameL:find("tongue")
-                    or nameL:find("mouth") or nameL:find("nose") or nameL:find("lid")
-
+                local isFA = isFaceByName(obj.Name)
                 local pos, rot = Vector3.new(0,0,0), Vector3.new(0,0,0)
-                if not isNamedFace then
+
+                if isFA then
+                    pos, rot = getFaceAccTransform(obj, srcHead)
+                else
                     local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
                     if weld then
                         pos = weld.C0.Position
@@ -196,14 +247,9 @@ local function copyAvatar(target)
                     end
                 end
 
-                -- ✅ AccessoryType untuk fallback: pakai Hat (aman, selalu ada)
-                local accType
-                local okHat, hatEnum = pcall(function() return Enum.AccessoryType.Hat end)
-                accType = (okHat and hatEnum) or Enum.AccessoryType.Hat
-
                 table.insert(accsData, {
                     AssetId = id,
-                    AccessoryType = accType,
+                    AccessoryType = Enum.AccessoryType.Hat,
                     IsLayered = false,
                     Position = pos,
                     Rotation = rot,
@@ -218,7 +264,7 @@ local function copyAvatar(target)
     local pantsId = d.Pants == 0 and extractId((char:FindFirstChildOfClass("Pants") or {}).PantsTemplate) or d.Pants
     local faceId = d.Face
     if faceId == 0 then
-        local decal = char:FindFirstChild("Head") and char.Head:FindFirstChildOfClass("Decal")
+        local decal = srcHead and srcHead:FindFirstChildOfClass("Decal")
         if decal then faceId = extractId(decal.Texture) end
     end
     d.Shirt = shirtId
@@ -236,7 +282,7 @@ local function copyAvatar(target)
             pcall(function() dstHum:ApplyDescription(d) end)
         end
         cloneFaceToChar(
-            char:FindFirstChild("Head") and char.Head:GetChildren() or {},
+            srcHead and srcHead:GetChildren() or {},
             dstChar:FindFirstChild("Head")
         )
     end
@@ -363,4 +409,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V13 By Only Gataa loaded! (Scheduler Error Fixed)")
+print("✅ Copy Avatar V14 By Only Gataa loaded! (Face Attachment Fix)")
