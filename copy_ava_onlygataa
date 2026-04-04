@@ -1,5 +1,5 @@
 -- Copy Avatar Script - Rayfield UI + Live Search
--- By Only Gataa (V13 - Fixed Accessories Position)
+-- By Only Gataa (V11)
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
@@ -134,8 +134,6 @@ local function copyAvatar(target)
 
     local accsData = {}
     local addedIds = {}
-
-    -- Prioritas 1: GetAccessories dari description (layered clothing)
     local ok2, accs = pcall(function() return d:GetAccessories(true) end)
     if ok2 and accs then
         table.sort(accs, function(a, b) return (a.Order or 0) < (b.Order or 0) end)
@@ -156,53 +154,27 @@ local function copyAvatar(target)
         end
     end
 
-    -- Prioritas 2: Aksesori fisik di karakter (non-layered / hat)
     for _, obj in pairs(char:GetDescendants()) do
         if obj:IsA("Accessory") then
             local handle = obj:FindFirstChild("Handle")
-            if not handle then continue end
-
-            local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+            local mesh = handle and handle:FindFirstChildOfClass("SpecialMesh")
             local id = mesh and extractId(mesh.MeshId) or 0
             if id == 0 and mesh then id = extractId(mesh.TextureId) end
-
             if id ~= 0 and not addedIds[id] then
                 addedIds[id] = true
-
-                -- ✅ Ambil posisi dari Attachment (akurat)
-                local handleAtt = handle:FindFirstChildOfClass("Attachment")
-                local pos = Vector3.new(0, 0, 0)
-                local rot = Vector3.new(0, 0, 0)
-
-                if handleAtt then
-                    -- Cari attachment pasangan di body karakter
-                    local bodyAtt = nil
-                    for _, part in pairs(char:GetDescendants()) do
-                        if part:IsA("Attachment")
-                            and part.Name == handleAtt.Name
-                            and part.Parent ~= handle
-                            and part.Parent:IsA("BasePart") then
-                            bodyAtt = part
-                            break
-                        end
-                    end
-
-                    if bodyAtt then
-                        -- Hitung offset relatif antara handle attachment dan body attachment
-                        local relCF = bodyAtt.WorldCFrame:ToObjectSpace(handleAtt.WorldCFrame)
-                        pos = relCF.Position
-                        local rx, ry, rz = relCF:ToEulerAnglesXYZ()
-                        rot = Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
-                    end
+                local weld = handle:FindFirstChild("AccessoryWeld") or handle:FindFirstChildOfClass("Weld")
+                local pos, rot = Vector3.new(0,0,0), Vector3.new(0,0,0)
+                if weld then
+                    pos = weld.C0.Position
+                    local rx, ry, rz = weld.C0:ToEulerAnglesXYZ()
+                    rot = Vector3.new(math.deg(rx), math.deg(ry), math.deg(rz))
                 end
-
                 table.insert(accsData, {
                     AssetId = id,
                     AccessoryType = Enum.AccessoryType.Hat,
                     IsLayered = false,
-                    Position = pos,
-                    Rotation = rot,
-                    Scale = Vector3.new(1, 1, 1),
+                    Position = pos, Rotation = rot,
+                    Scale = handle.Size or Vector3.new(1,1,1),
                     Puffiness = 0,
                 })
             end
@@ -226,10 +198,12 @@ local function copyAvatar(target)
 
     local dstChar = LocalPlayer.Character
     if dstChar then
+        -- ✅ Apply description ke humanoid lokal untuk view sendiri
         local dstHum = dstChar:FindFirstChildOfClass("Humanoid")
         if dstHum then
             pcall(function() dstHum:ApplyDescription(d) end)
         end
+        -- ✅ Clone face saja
         cloneFaceToChar(
             char:FindFirstChild("Head") and char.Head:GetChildren() or {},
             dstChar:FindFirstChild("Head")
@@ -358,4 +332,4 @@ end)
 local initList = getPlayerNames()
 if #initList > 0 then selectedPlayer = Players:FindFirstChild(initList[1]) end
 
-print("✅ Copy Avatar V13 By Only Gataa loaded!")
+print("✅ Copy Avatar V11 By Only Gataa loaded!")
