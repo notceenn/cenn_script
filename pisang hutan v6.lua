@@ -1,7 +1,7 @@
 -- ================================================
 --   🍌 Hutan Pisang - By Notceenn
 --   Pisang menyerang (terbang) tanpa batas jarak
---   🔑 Key System Manual (semua tab dibuat sekali di awal)
+--   🔑 Dengan Key System (remote controlled)
 -- ================================================
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
@@ -10,29 +10,15 @@ local Players     = game:GetService("Players")
 local RunService  = game:GetService("RunService")
 local LocalPlayer = Players.LocalPlayer
 
-local KEY_URL = "https://raw.githubusercontent.com/notceenn/cenn_script/refs/heads/main/key.txt"
-
-local keyAccepted = false
-
-local function GetRemoteKey()
-    local success, result = pcall(function()
-        return game:HttpGet(KEY_URL)
-    end)
-    if success and result then
-        return (result:gsub("^%s+", ""):gsub("%s+$", ""))
-    end
-    return nil
-end
-
--- ================================================
--- STATE & LOGIC
--- ================================================
-
 local Config       = { Speed = 800 }
 local targetPlayer  = nil
 local active        = false
 local conn          = nil
 local myBananas     = setmetatable({}, {__mode = "k"})
+
+-- ================================================
+-- UTILITY
+-- ================================================
 
 local function FilterPlayers(input)
     local result, kw = {}, input:lower()
@@ -80,6 +66,10 @@ local function FindBananas()
     return list
 end
 
+-- ================================================
+-- OWNERSHIP: hanya pisang milik LocalPlayer yang dihoming
+-- ================================================
+
 local function ClaimIfMine(obj)
     if not obj or obj.Name ~= "Handle" or not obj:IsA("BasePart") then return end
     if not (obj:FindFirstChild("BananaScript") or obj:FindFirstChild("UpdatedBanana")) then return end
@@ -88,6 +78,7 @@ local function ClaimIfMine(obj)
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
 
+    -- Pisang yang baru muncul dekat posisi kita = pisang yang kita lempar
     if (obj.Position - root.Position).Magnitude <= 15 then
         myBananas[obj] = true
     end
@@ -102,6 +93,10 @@ end)
 for _, obj in ipairs(workspace:GetChildren()) do
     pcall(ClaimIfMine, obj)
 end
+
+-- ================================================
+-- VISUAL: Highlight + Garis Jarak Terpental di korban
+-- ================================================
 
 local victimHighlight   = nil
 local victimBillboard   = nil
@@ -152,6 +147,7 @@ local function UpdateVictimVisuals()
     local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
     if not root or not myRoot then return end
 
+    -- Self-healing kalau karakter korban respawn
     if not victimBillboard or not victimBillboard.Parent then
         SetupVictimVisuals(targetPlayer)
         return
@@ -177,9 +173,8 @@ local function GetCenter(char)
 end
 
 -- ================================================
--- Rayfield reference dibuat setelah semua UI ada
+-- CHASE (menyerang terbang ke target, tanpa batas jarak)
 -- ================================================
-local RayfieldNotify -- diisi belakangan biar StartChase/StopChase bisa notify
 
 local function StartChase()
     if conn then conn:Disconnect() end
@@ -203,6 +198,8 @@ local function StartChase()
 
             local dist = (targetPos - banana.Position).Magnitude
 
+            -- Prediksi posisi target lebih jauh ke depan (2x travel time) supaya
+            -- lebih akurat mengejar korban yang loncat-loncat / gerak cepat
             local travelTime    = dist / Config.Speed
             local predictedPos  = targetPos + targetVel * (travelTime * 2)
             local toPredicted   = predictedPos - banana.Position
@@ -213,6 +210,7 @@ local function StartChase()
             banana.AssemblyLinearVelocity  = dir * (Config.Speed * 1.5)
             banana.AssemblyAngularVelocity = Vector3.zero
 
+            -- Saat pisang sudah sangat dekat, langsung dorong korban instant & sekencang-kencangnya
             if dist <= 6 then
                 targetRoot.AssemblyLinearVelocity = dir * (Config.Speed * 3) + Vector3.new(0, 80, 0)
             end
@@ -236,7 +234,7 @@ local function StopChase()
 end
 
 -- ================================================
--- UI (SEMUA tab dibuat sekali di sini, di awal)
+-- UI (dengan Key System)
 -- ================================================
 
 local Window = Rayfield:CreateWindow({
@@ -245,58 +243,33 @@ local Window = Rayfield:CreateWindow({
     LoadingSubtitle = "By Notceenn",
     Theme           = "Default",
     ConfigurationSaving = { Enabled = false },
+
+    KeySystem = true, -- Aktifkan key system
+    KeySettings = {
+        Title           = "Hutan Pisang - Key System",
+        Subtitle        = "Masukkan key untuk lanjut",
+        Note            = "Minta key ke pemilik script (Notceenn)",
+        FileName        = "CennKey_HutanPisang", -- nama file simpan key lokal user
+        SaveKey         = true, -- key tersimpan, gak perlu input ulang tiap join
+        GrabKeyFromSite = true, -- ambil key dari link GitHub (bisa kamu ubah kapan saja)
+        Key = {
+            "https://raw.githubusercontent.com/notceenn/cenn_script/refs/heads/main/key.txt"
+        }
+    },
 })
 
-local KeyTab  = Window:CreateTab("🔑 Key", 4483362458)
+-- Notifikasi ini HANYA akan muncul kalau Key BENAR,
+-- karena Rayfield menahan eksekusi script di baris CreateWindow
+-- sampai user memasukkan key yang valid.
+Rayfield:Notify({
+    Title    = "✅ Key Benar!",
+    Content  = "Selamat datang di Hutan Pisang!",
+    Duration = 4,
+})
+
 local MainTab = Window:CreateTab("🍌 Main", 4483362458)
 local SetTab  = Window:CreateTab("⚙️ Settings", 4483362458)
 
--- ===== KEY TAB =====
-KeyTab:CreateParagraph({
-    Title   = "Key System",
-    Content = "Masukkan key untuk membuka Hutan Pisang.\nMinta key ke pemilik script (Notceenn).",
-})
-
-KeyTab:CreateInput({
-    Name                     = "Key",
-    PlaceholderText          = "Ketik key di sini lalu tekan Enter...",
-    RemoveTextAfterFocusLost = false,
-    Flag                     = "KeyInputBox",
-    Callback                 = function(input)
-        if keyAccepted then return end
-
-        local cleanInput = input:gsub("^%s+", ""):gsub("%s+$", "")
-        if cleanInput == "" then return end
-
-        local validKey = GetRemoteKey()
-
-        if not validKey then
-            Rayfield:Notify({
-                Title    = "⚠️ Error",
-                Content  = "Gagal mengambil data key. Cek koneksi internet kamu.",
-                Duration = 4,
-            })
-            return
-        end
-
-        if cleanInput == validKey then
-            keyAccepted = true
-            Rayfield:Notify({
-                Title    = "✅ Key Benar!",
-                Content  = "Selamat datang di Hutan Pisang! Buka tab 🍌 Main untuk mulai.",
-                Duration = 5,
-            })
-        else
-            Rayfield:Notify({
-                Title    = "❌ Key Salah!",
-                Content  = "Key yang kamu masukkan tidak valid. Coba lagi.",
-                Duration = 4,
-            })
-        end
-    end,
-})
-
--- ===== MAIN TAB =====
 local playerDropdown
 local function RefreshDrop(kw)
     pcall(function()
@@ -306,6 +279,7 @@ local function RefreshDrop(kw)
     end)
 end
 
+-- MAIN TAB
 MainTab:CreateSection("Target")
 
 MainTab:CreateInput({
@@ -314,10 +288,6 @@ MainTab:CreateInput({
     RemoveTextAfterFocusLost = false,
     Flag                     = "SearchBox",
     Callback                 = function(input)
-        if not keyAccepted then
-            Rayfield:Notify({ Title="🔒 Terkunci", Content="Masukkan key yang benar dulu di tab 🔑 Key.", Duration=3 })
-            return
-        end
         pcall(function() RefreshDrop(input) end)
         local found = AutoSelect(input)
         if found and found ~= targetPlayer then
@@ -341,10 +311,6 @@ playerDropdown = MainTab:CreateDropdown({
     MultipleOptions = false,
     Flag            = "PlayerSelect",
     Callback        = function(sel)
-        if not keyAccepted then
-            Rayfield:Notify({ Title="🔒 Terkunci", Content="Masukkan key yang benar dulu di tab 🔑 Key.", Duration=3 })
-            return
-        end
         local str = type(sel) == "table" and sel[1] or sel
         local plr = ParsePlayer(str)
         if plr then
@@ -372,10 +338,6 @@ MainTab:CreateToggle({
     CurrentValue = false,
     Flag         = "EnableToggle",
     Callback     = function(val)
-        if not keyAccepted then
-            Rayfield:Notify({ Title="🔒 Terkunci", Content="Masukkan key yang benar dulu di tab 🔑 Key.", Duration=3 })
-            return
-        end
         if val then
             if not targetPlayer then
                 Rayfield:Notify({
@@ -393,10 +355,10 @@ MainTab:CreateToggle({
 
 MainTab:CreateParagraph({
     Title   = "Cara Pakai",
-    Content = "1. Masukkan Key yang benar di tab 🔑 Key\n2. Ketik 3+ huruf → auto terpilih\n3. Enable Banana Chaser\n4. Equip & lempar Banana Peel!\n5. Pisang otomatis terbang menyerang target berapapun jauhnya 🍌💀",
+    Content = "1. Ketik 3+ huruf → auto terpilih\n2. Enable Banana Chaser\n3. Equip & lempar Banana Peel!\n4. Pisang otomatis terbang menyerang target berapapun jauhnya 🍌💀",
 })
 
--- ===== SETTINGS TAB =====
+-- SETTINGS TAB
 SetTab:CreateSection("Kecepatan")
 
 SetTab:CreateSlider({
@@ -408,9 +370,7 @@ SetTab:CreateSlider({
     Flag         = "BananaSpeed",
     Callback     = function(v)
         Config.Speed = v
-        if keyAccepted then
-            Rayfield:Notify({ Title="Speed: "..v, Duration=1 })
-        end
+        Rayfield:Notify({ Title="Speed: "..v, Duration=1 })
     end,
 })
 
@@ -429,3 +389,9 @@ Players.PlayerRemoving:Connect(function(plr)
     end
     task.wait(0.5) RefreshDrop("")
 end)
+
+Rayfield:Notify({
+    Title   = "Hutan Pisang",
+    Content = "By Notceenn | Siap! (Brutal Attack Mode)",
+    Duration = 3,
+})
