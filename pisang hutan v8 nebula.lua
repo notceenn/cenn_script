@@ -1,13 +1,22 @@
 -- ================================================
---   🍌 Hutan Pisang - By Notceenn (GLOBAL ATTACK)
---   UI: Nebula UI (SugaBlaz) + Key System dari GitHub
---   Fitur & logika SAMA PERSIS seperti versi Rayfield,
---   hanya UI library yang diganti.
+--   🍌 Banana Peel - Hutan @cenntzy
+--   UI: Nebula UI (SugaBlaz) + Key System Manual (wajib tiap execute)
 -- ================================================
 
+local Players     = game:GetService("Players")
+local RunService  = game:GetService("RunService")
+local LocalPlayer = Players.LocalPlayer
+
 -- ================================================
--- 🔑 Ambil Key dari key.txt di GitHub (fetch tiap script dijalankan,
--- jadi kalau kamu ganti isi key.txt, key lama otomatis invalid)
+-- Load Nebula UI Library
+-- ================================================
+
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/SugaBlaz/UI-Library/refs/heads/main/Nebula%20UI.lua"))()
+
+-- ================================================
+-- 🔑 KEY SYSTEM MANUAL
+-- Wajib dimasukkan SETIAP kali script di-execute (tidak disimpan/save),
+-- key diambil langsung dari key.txt di GitHub setiap kali user submit.
 -- ================================================
 
 local KEY_URL = "https://raw.githubusercontent.com/notceenn/cenn_script/refs/heads/main/key.txt"
@@ -22,17 +31,15 @@ local function GetRemoteKey()
     return nil
 end
 
-local RemoteKey = GetRemoteKey() or "GAGAL_AMBIL_KEY_CEK_KONEKSI"
+local keyAccepted = false
 
--- ================================================
--- Load Nebula UI Library
--- ================================================
-
-local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/SugaBlaz/UI-Library/refs/heads/main/Nebula%20UI.lua"))()
-
-local Players     = game:GetService("Players")
-local RunService  = game:GetService("RunService")
-local LocalPlayer = Players.LocalPlayer
+local function RequireKey()
+    if not keyAccepted then
+        Library:Notify({ Title = "🔒 Terkunci", Text = "Masukkan key dulu di tab 🔑 Key!", Duration = 3 })
+        return true -- true = terkunci (blokir)
+    end
+    return false
+end
 
 local Config = {
     Speed        = 800,
@@ -384,34 +391,57 @@ local function ThrowBanana()
 end
 
 -- ================================================
--- UI (Nebula)
+-- UI (Nebula) - TANPA custom theme, pakai default
 -- ================================================
 
 local Window = Library:CreateWindow({
-    Name       = "Hutan Pisang - GLOBAL ATTACK",
-    Theme      = "Midnight",
-    SaveName   = "HutanPisang_Nebula",
-    Size       = UDim2.new(0.42, 0, 0.55, 0),
-    Position   = UDim2.new(0.5, 0, 0.5, 0),
-
-    KeySystem = true,
-    KeySettings = {
-        Title           = "Hutan Pisang - Key System",
-        Key             = RemoteKey, -- diambil langsung dari key.txt di GitHub
-        InsertKeyAtEnd  = false,
-        SaveKey         = true,
-        Callback        = function()
-            Library:Notify({
-                Title    = "✅ Key Benar!",
-                Text     = "Selamat datang di Hutan Pisang!",
-                Duration = 3,
-            })
-        end
-    }
+    Name     = "Banana Peel - Hutan @cenntzy",
+    SaveName = "BananaPeel_Hutan",
+    Size     = UDim2.new(0.42, 0, 0.55, 0),
+    Position = UDim2.new(0.5, 0, 0.5, 0),
 })
 
+local KeyTab  = Window:CreateTab("🔑 Key")
 local MainTab = Window:CreateTab("🍌 Main")
 local SetTab  = Window:CreateTab("⚙️ Settings")
+local DevTab  = Window:CreateTab("👨‍💻 Developer")
+
+-- ================================================
+-- 🔑 TAB KEY
+-- ================================================
+
+KeyTab:CreateLabel("Key System\nMasukkan key untuk membuka Banana Peel - Hutan.\nKey WAJIB dimasukkan setiap kali script dijalankan.\nMinta key ke pemilik script (@cenntzy).")
+
+KeyTab:CreateTextbox({
+    Name            = "Masukkan Key",
+    CurrentValue    = "",
+    PlaceholderText = "Ketik key di sini lalu Enter...",
+    Flag            = "KeyInputBox",
+    Callback        = function(input)
+        if keyAccepted then return end
+
+        local cleanInput = input:gsub("^%s+", ""):gsub("%s+$", "")
+        if cleanInput == "" then return end
+
+        local validKey = GetRemoteKey()
+
+        if not validKey then
+            Library:Notify({ Title = "⚠️ Error", Text = "Gagal mengambil data key. Cek koneksi internet kamu!", Duration = 4 })
+            return
+        end
+
+        if cleanInput == validKey then
+            keyAccepted = true
+            Library:Notify({ Title = "✅ Key Benar!", Text = "Selamat datang di Banana Peel - Hutan!", Duration = 4 })
+        else
+            Library:Notify({ Title = "❌ KEY SALAH!", Text = "Key salah tolol! Coba lagi.", Duration = 4 })
+        end
+    end,
+})
+
+-- ================================================
+-- 🍌 TAB MAIN (dikunci sampai key benar)
+-- ================================================
 
 local playerDropdown
 local function RefreshDrop(kw)
@@ -430,6 +460,7 @@ MainTab:CreateTextbox({
     PlaceholderText = "Ketik 3+ huruf → auto terpilih!",
     Flag            = "SearchBox",
     Callback        = function(input)
+        if RequireKey() then return end
         pcall(function() RefreshDrop(input) end)
         local found = AutoSelect(input)
         if found and found ~= targetPlayer then
@@ -446,6 +477,7 @@ playerDropdown = MainTab:CreateDropdown({
     CurrentOption = "Pilih player...",
     Flag          = "PlayerSelect",
     Callback      = function(sel)
+        if RequireKey() then return end
         local str = type(sel) == "table" and sel[1] or sel
         local plr = ParsePlayer(str)
         if plr then
@@ -456,7 +488,13 @@ playerDropdown = MainTab:CreateDropdown({
     end,
 })
 
-MainTab:CreateButton({ Name = "🔄 Refresh List", Callback = function() RefreshDrop("") end })
+MainTab:CreateButton({
+    Name     = "🔄 Refresh List",
+    Callback = function()
+        if RequireKey() then return end
+        RefreshDrop("")
+    end
+})
 
 MainTab:CreateSection("Control")
 
@@ -465,6 +503,7 @@ MainTab:CreateToggle({
     CurrentValue = false,
     Flag         = "EnableToggle",
     Callback     = function(val)
+        if RequireKey() then return end
         if val then
             if not targetPlayer then Library:Notify({ Title = "Pilih target dulu!", Text = "", Duration = 2 }) return end
             StartChase()
@@ -475,12 +514,17 @@ MainTab:CreateToggle({
 MainTab:CreateButton({
     Name     = "🎯 Lempar Banana Peel",
     Callback = function()
+        if RequireKey() then return end
         ThrowBanana()
         Library:Notify({ Title = "🍌", Text = "Pisang dilempar!", Duration = 2 })
     end
 })
 
-MainTab:CreateLabel("Cara Pakai\n1. Pilih target\n2. Atur bagian tubuh di Settings\n3. Enable & lempar pisang!\n4. Pisang prediksi lari/loncat & serangan SELALU KE ATAS 999999! 🍌💀")
+MainTab:CreateLabel("Cara Pakai\n1. Masukkan Key di tab 🔑 Key\n2. Pilih target\n3. Atur bagian tubuh di Settings\n4. Enable & lempar pisang!\n5. Pisang prediksi lari/loncat & serangan SELALU KE ATAS 999999! 🍌💀")
+
+-- ================================================
+-- ⚙️ TAB SETTINGS (dikunci sampai key benar)
+-- ================================================
 
 SetTab:CreateSection("Target Bagian Tubuh")
 SetTab:CreateDropdown({
@@ -489,6 +533,7 @@ SetTab:CreateDropdown({
     CurrentOption = "HumanoidRootPart",
     Flag          = "BodyPartSelect",
     Callback      = function(sel)
+        if RequireKey() then return end
         local str = type(sel) == "table" and sel[1] or sel
         Config.TargetPart = str
     end
@@ -500,6 +545,7 @@ SetTab:CreateToggle({
     CurrentValue = false,
     Flag         = "TracerToggle",
     Callback     = function(val)
+        if RequireKey() then return end
         Config.Tracer = val
         if val then if active then CreateTracer() end else DestroyTracer() end
     end
@@ -511,19 +557,38 @@ SetTab:CreateSlider({
     Range        = {100, 3000},
     CurrentValue = 900,
     Flag         = "BananaSpeed",
-    Callback     = function(v) Config.Speed = v end
+    Callback     = function(v)
+        if RequireKey() then return end
+        Config.Speed = v
+    end
 })
 
 SetTab:CreateLabel("Panduan Speed\n300   = pelan\n500   = sedang\n800   = default\n1200 = kencang\n3000 = MAXIMUM 💀")
+
+-- ================================================
+-- 👨‍💻 TAB DEVELOPER
+-- ================================================
+
+DevTab:CreateSection("Tentang Script")
+
+DevTab:CreateLabel("Banana Peel - Hutan\nDibuat oleh: @cenntzy\nDiscord: @cenntzy\n\nUntuk request key, bug report, atau saran fitur, hubungi langsung lewat Discord di atas.")
+
+DevTab:CreateButton({
+    Name     = "📋 Copy Discord: @cenntzy",
+    Callback = function()
+        pcall(function()
+            if setclipboard then
+                setclipboard("@cenntzy")
+                Library:Notify({ Title = "📋 Disalin!", Text = "Discord @cenntzy sudah disalin ke clipboard.", Duration = 3 })
+            else
+                Library:Notify({ Title = "Discord", Text = "@cenntzy", Duration = 5 })
+            end
+        end)
+    end
+})
 
 Players.PlayerAdded:Connect(function() task.wait(0.5) RefreshDrop("") end)
 Players.PlayerRemoving:Connect(function(plr)
     if targetPlayer == plr then targetPlayer = nil StopChase() end
     task.wait(0.5) RefreshDrop("")
 end)
-
-Library:Notify({
-    Title    = "Hutan Pisang - GLOBAL ATTACK",
-    Text     = "By Notceenn | Prediksi Lari/Loncat + Serangan Ke Atas!",
-    Duration = 3
-})
