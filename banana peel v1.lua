@@ -1,7 +1,7 @@
 -- ================================================
 --   🍌 Banana Peel - Hutan @cenntzy (V1)
 --   UI: Rayfield + Key Gate Terpisah
---   Fungsi serangan DIKEMBALIKAN seperti versi yang berhasil
+--   Mode Manual + Mode Serang Semua (prioritas terdekat, gantian 1.5s)
 -- ================================================
 
 local Players      = game:GetService("Players")
@@ -218,14 +218,28 @@ local function MainScript()
 
     local Config = {
         Speed      = 800,
-        BlastPower = 2000000,
+        BlastPower = 3000000,
         TargetPart = "HumanoidRootPart",
     }
-    local targetPlayer  = nil
+    local targetPlayer  = nil  -- target manual (dipilih user)
     local active        = false
     local conn          = nil
     local myBananas     = {}
     local lastThrowTime = 0
+
+    -- === Mode Serang Semua ===
+    local attackAllMode        = false
+    local autoTarget           = nil
+    local autoTargetSetAt      = 0
+    local AUTO_SWITCH_INTERVAL = 1      -- gantian tiap 1 detik
+    local AUTO_COOLDOWN        = 30     -- baru bisa kepilih lagi setelah 30 detik
+    local MIN_PICK_DISTANCE    = 15     -- jangan yang KETERLALU deket
+    local MAX_PICK_DISTANCE    = 200    -- jangan yang KETERLALU jauh
+    local recentlyAttacked     = {}
+
+    -- Target yang SEDANG diserang saat ini (bisa targetPlayer atau autoTarget
+    -- tergantung mode) -- ESP selalu ngikutin variabel ini
+    local displayTarget = nil
 
     local bodyPartsList = {
         "Head","UpperTorso","LowerTorso","Torso",
@@ -269,6 +283,49 @@ local function MainScript()
             end
         end
         return nil
+    end
+
+    local function GetCenter(char)
+        if not char then return nil end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if not root then return nil end
+        return root.Position
+    end
+
+    -- Cek apakah player sedang duduk di kursi (Seat/VehicleSeat), bukan
+    -- cuma humanoid.Sit doang (biar akurat: kursi beneran, bukan trik lain)
+    local function IsSeated(plr)
+        local char = plr.Character
+        if not char then return false end
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not hum then return false end
+        return hum.SeatPart ~= nil or hum.Sit == true
+    end
+
+    -- 🎲 Cari korban buat Mode Serang Semua: ACAK (bukan prioritas terdekat),
+    -- tapi tetap dibatasi jarak -- jangan yang KETERLALU deket atau jauh,
+    -- skip yang lagi cooldown, dan skip yang lagi duduk di kursi.
+    local function FindRandomVictim(fromPos, excludeMap)
+        local inRange, fallback = {}, {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local onCooldown = excludeMap and excludeMap[plr] and tick() < excludeMap[plr]
+                if not onCooldown and not IsSeated(plr) then
+                    local pos = GetCenter(plr.Character)
+                    if pos then
+                        local d = (pos - fromPos).Magnitude
+                        table.insert(fallback, plr)
+                        if d >= MIN_PICK_DISTANCE and d <= MAX_PICK_DISTANCE then
+                            table.insert(inRange, plr)
+                        end
+                    end
+                end
+            end
+        end
+
+        local pool = #inRange > 0 and inRange or fallback
+        if #pool == 0 then return nil end
+        return pool[math.random(1, #pool)]
     end
 
     local function ClaimIfMine(obj)
@@ -322,7 +379,7 @@ local function MainScript()
     end
 
     -- ================================================
-    -- VISUAL: Highlight + Jarak
+    -- VISUAL: Highlight + Nickname + Jarak
     -- ================================================
 
     local victimHighlight   = nil
@@ -383,20 +440,20 @@ local function MainScript()
         label.Parent = victimBillboard
     end
 
-    local function UpdateVictimVisuals()
-        if not targetPlayer or not targetPlayer.Character then return end
+    local function UpdateVictimVisuals(forTarget)
+        if not forTarget or not forTarget.Character then return end
 
-        if currentVisualFor ~= targetPlayer then
-            SetupVictimVisuals(targetPlayer)
+        if currentVisualFor ~= forTarget then
+            SetupVictimVisuals(forTarget)
             return
         end
 
-        local root = targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        local root = forTarget.Character:FindFirstChild("HumanoidRootPart")
         local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not root or not myRoot then return end
 
         if not victimBillboard or not victimBillboard.Parent then
-            SetupVictimVisuals(targetPlayer)
+            SetupVictimVisuals(forTarget)
             return
         end
 
@@ -408,9 +465,7 @@ local function MainScript()
     end
 
     -- ================================================
-    -- 📡 AUTO RE-ATTACH ESP saat korban respawn
-    -- (misal setelah kepental ke langit lalu jatuh/respawn) --
-    -- tanpa perlu toggle Enable Banana Chaser manual lagi
+    -- 📡 AUTO RE-ATTACH ESP saat korban respawn (khusus mode Manual)
     -- ================================================
 
     local targetCharConn = nil
@@ -424,7 +479,7 @@ local function MainScript()
         targetCharConn = plr.CharacterAdded:Connect(function(newChar)
             task.spawn(function()
                 local root = newChar:WaitForChild("HumanoidRootPart", 5)
-                if root and targetPlayer == plr and active then
+                if root and not attackAllMode and targetPlayer == plr and active then
                     SetupVictimVisuals(plr)
                 end
             end)
@@ -432,8 +487,7 @@ local function MainScript()
     end
 
     -- ================================================
-    -- 🔥 GLOBAL ATTACK -- LOGIKA DIKEMBALIKAN seperti versi
-    -- yang berhasil melempar korban (sebelum "optimasi" kemarin)
+    -- 🔥 GLOBAL ATTACK
     -- ================================================
 
     local victimMovers = {}
@@ -450,10 +504,6 @@ local function MainScript()
             end
         end
 
-        -- Ambil alih network ownership root korban ke client kita. Tanpa ini,
-        -- fisika korban masih "dimiliki" client mereka sendiri, jadi velocity
-        -- yang kita paksa sempat dilawan/dikoreksi balik beberapa frame dulu
-        -- sebelum akhirnya nurut -- ini penyebab jeda sebelum korban kedorong.
         pcall(function()
             targetRoot:SetNetworkOwner(LocalPlayer)
         end)
@@ -483,28 +533,60 @@ local function MainScript()
 
     local function StartChase()
         if conn then conn:Disconnect() end
-        if targetPlayer == LocalPlayer then return end
         active = true
-        SetupVictimVisuals(targetPlayer)
         ClearAllMovers()
+
+        if attackAllMode then
+            autoTarget = nil
+            autoTargetSetAt = 0
+            recentlyAttacked = {}
+        else
+            if targetPlayer == LocalPlayer then active = false return end
+            displayTarget = targetPlayer
+            SetupVictimVisuals(targetPlayer)
+        end
 
         conn = RunService.Heartbeat:Connect(function(dt)
             if not active then return end
-            if not targetPlayer or not targetPlayer.Character then return end
-            if targetPlayer == LocalPlayer then return end
 
-            -- ESP di-update PALING DULUAN di sini, TIDAK digantung sama
-            -- pengecekan targetRoot/banana di bawah -- supaya ESP tetap
-            -- selalu di-scan ulang tiap frame walau logika serangan di bawah
-            -- sempat gagal/kosong (misal pas korban baru aja respawn).
-            UpdateVictimVisuals()
+            -- Tentukan siapa yang SEDANG diserang frame ini, tergantung mode
+            local currentTarget = nil
 
-            local character = targetPlayer.Character
+            if attackAllMode then
+                local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+                local fromPos = myRoot and myRoot.Position
+
+                if fromPos and (not autoTarget or not autoTarget.Character or tick() - autoTargetSetAt >= AUTO_SWITCH_INTERVAL) then
+                    if autoTarget then
+                        recentlyAttacked[autoTarget] = tick() + AUTO_COOLDOWN
+                    end
+                    local nextVictim = FindRandomVictim(fromPos, recentlyAttacked)
+                    if nextVictim then
+                        autoTarget = nextVictim
+                        autoTargetSetAt = tick()
+                    end
+                end
+                currentTarget = autoTarget
+            else
+                currentTarget = targetPlayer
+            end
+
+            displayTarget = currentTarget
+
+            if not currentTarget or not currentTarget.Character or currentTarget == LocalPlayer then
+                return
+            end
+
+            -- ESP di-update PALING DULUAN, gak digantung sama pengecekan
+            -- targetRoot/banana di bawah -- ESP (ikut target yg lagi
+            -- diserang, gantian di mode Serang Semua) selalu ke-refresh
+            UpdateVictimVisuals(currentTarget)
+
+            local character = currentTarget.Character
             local targetRoot = character:FindFirstChild("HumanoidRootPart")
             local humanoid   = character:FindFirstChildOfClass("Humanoid")
             if not targetRoot then return end
 
-            -- Bagian tubuh yang jadi titik tempel pisang (bisa diganti di Settings)
             local targetPart = character:FindFirstChild(Config.TargetPart)
             if not targetPart or not targetPart:IsA("BasePart") then
                 targetPart = targetRoot
@@ -515,10 +597,6 @@ local function MainScript()
 
             local movers = GetOrCreateMovers(targetRoot)
 
-            -- Offset posisi pisang:
-            -- - Diam (gak ada gerak horizontal)   -> 0 studs, pas di targetPart
-            -- - Lari/jalan                        -> 0.1 studs di DEPAN arah gerak
-            -- - Loncat (velocity Y positif)        -> tambahan +2 studs ke atas
             local vel = targetPart.AssemblyLinearVelocity
             local horizVel = Vector3.new(vel.X, 0, vel.Z)
             local horizSpeed = horizVel.Magnitude
@@ -548,17 +626,9 @@ local function MainScript()
                     humanoid.Sit = false
                     humanoid.WalkSpeed = 0
                     humanoid.JumpPower = 0
-                    -- Setop niat gerak humanoid sepenuhnya, biar gak "ngelawan"
-                    -- balik dorongan pisang di frame-frame awal
                     pcall(function() humanoid:Move(Vector3.new(0, 0, 0), false) end)
                 end
 
-                -- FIX BUG: sebelumnya velocity DITAMBAH terus tiap frame
-                -- (rigVelocity + upBlast), jadi numpuk sampai ekstrem dalam
-                -- hitungan detik -- makanya slider kecil/gede kelihatan SAMA
-                -- AJA (sama-sama udah mentok). Sekarang di-SET langsung
-                -- (bukan ditambah), jadi kekuatan slider beneran kepakai
-                -- dan kerasa bedanya.
                 targetRoot.AssemblyLinearVelocity  = upBlast
                 targetRoot.AssemblyAngularVelocity = EXTREME
 
@@ -567,22 +637,17 @@ local function MainScript()
 
                 for _, part in ipairs(character:GetChildren()) do
                     if part:IsA("BasePart") and part ~= targetRoot then
-                        -- Ikut proporsional ke Blast Power juga (bukan angka
-                        -- tetap), supaya SEMUA bagian tubuh kerasa efek
-                        -- slidernya, bukan cuma root doang
                         part.AssemblyLinearVelocity  = upBlast
                         part.AssemblyAngularVelocity = EXTREME
                     end
                 end
             end
-
-            UpdateVictimVisuals()
         end)
 
         pcall(function()
             Rayfield:Notify({
                 Title    = "🍌 GLOBAL ATTACK!",
-                Content  = "Serangan aktif!",
+                Content  = attackAllMode and "Mode: Serang Semua (prioritas terdekat)" or "Mode: Manual",
                 Duration = 3,
             })
         end)
@@ -593,6 +658,8 @@ local function MainScript()
         if conn then conn:Disconnect() conn = nil end
         ClearVictimVisuals()
         ClearAllMovers()
+        autoTarget = nil
+        displayTarget = nil
         pcall(function()
             Rayfield:Notify({ Title="🍌 Dimatikan", Content="", Duration=2 })
         end)
@@ -803,7 +870,39 @@ local function MainScript()
         end)
     end
 
-    MainTab:CreateSection("Target")
+    MainTab:CreateSection("Mode")
+
+    MainTab:CreateToggle({
+        Name         = "🌐 Mode Serang Semua Orang (Prioritas Terdekat)",
+        CurrentValue = false,
+        Flag         = "AttackAllToggle",
+        Callback     = function(val)
+            attackAllMode = val
+            if val then
+                -- Nonaktifkan pemilihan manual selama mode ini aktif
+                selectionMode = "attackall"
+                ClearVictimVisuals()
+                autoTarget = nil
+                recentlyAttacked = {}
+                pcall(function()
+                    Rayfield:Notify({ Title = "🌐 Mode Serang Semua ON", Content = "Target gantian tiap 1.5 detik, prioritas terdekat.", Duration = 3 })
+                end)
+            else
+                selectionMode = nil
+                ClearVictimVisuals()
+                autoTarget = nil
+                -- Kembali ke target manual yang tersimpan (kalau ada)
+                if active and targetPlayer then
+                    SetupVictimVisuals(targetPlayer)
+                end
+                pcall(function()
+                    Rayfield:Notify({ Title = "🌐 Mode Serang Semua OFF", Content = "Kembali ke target manual.", Duration = 3 })
+                end)
+            end
+        end,
+    })
+
+    MainTab:CreateSection("Target (khusus Mode Manual)")
 
     searchBoxRef = MainTab:CreateInput({
         Name                     = "Cari Nama / Nickname",
@@ -811,6 +910,10 @@ local function MainScript()
         RemoveTextAfterFocusLost = false,
         Flag                     = "SearchBox",
         Callback                 = function(input)
+            if attackAllMode then
+                Rayfield:Notify({ Title = "🔒 Nonaktifkan Mode Serang Semua dulu", Duration = 2 })
+                return
+            end
             if selectionMode == "dropdown" then return end
 
             pcall(function() RefreshDrop(input) end)
@@ -818,7 +921,6 @@ local function MainScript()
             if found and found ~= targetPlayer then
                 targetPlayer = found
                 selectionMode = "search"
-                -- Reset tampilan Dropdown supaya jelas gak lagi dipakai
                 pcall(function() playerDropdown:Set({"Pilih player..."}) end)
                 HookTargetCharacterAdded(targetPlayer)
                 if active then SetupVictimVisuals(targetPlayer) end
@@ -842,6 +944,10 @@ local function MainScript()
         MultipleOptions = false,
         Flag            = "PlayerSelect",
         Callback        = function(sel)
+            if attackAllMode then
+                Rayfield:Notify({ Title = "🔒 Nonaktifkan Mode Serang Semua dulu", Duration = 2 })
+                return
+            end
             if selectionMode == "search" then return end
 
             local str = type(sel) == "table" and sel[1] or sel
@@ -849,7 +955,6 @@ local function MainScript()
             if plr then
                 targetPlayer = plr
                 selectionMode = "dropdown"
-                -- Reset tampilan Search Box supaya jelas gak lagi dipakai
                 pcall(function() searchBoxRef:Set("") end)
                 HookTargetCharacterAdded(targetPlayer)
                 if active then SetupVictimVisuals(targetPlayer) end
@@ -882,8 +987,8 @@ local function MainScript()
         Flag         = "EnableToggle",
         Callback     = function(val)
             if val then
-                if not targetPlayer then
-                    Rayfield:Notify({ Title = "Pilih target dulu!", Duration = 2 })
+                if not attackAllMode and not targetPlayer then
+                    Rayfield:Notify({ Title = "Pilih target dulu (atau aktifkan Mode Serang Semua)!", Duration = 3 })
                     return
                 end
                 StartChase()
@@ -903,7 +1008,7 @@ local function MainScript()
 
     MainTab:CreateParagraph({
         Title   = "Cara Pakai",
-        Content = "1. Pilih target\n2. Enable Banana Chaser (ESP baru muncul di sini)\n3. Lempar pisang!\n4. Pisang nempel di HumanoidRootPart & serangan ke atas full power 🍌💀",
+        Content = "1. Pilih target manual ATAU aktifkan Mode Serang Semua\n2. Enable Banana Chaser (WAJIB, jadi saklar utama kedua mode)\n3. Lempar pisang!\n4. Serang Semua: target gantian tiap 1.5s, prioritas terdekat, ESP ikut pindah 🍌💀",
     })
 
     -- ================================================
@@ -951,7 +1056,7 @@ local function MainScript()
 
     SetTab:CreateParagraph({
         Title   = "Panduan",
-        Content = "Blast Power makin tinggi = korban makin tinggi & jauh terpental. Sekarang beneran ngefek sesuai slider (bug numpuk sudah diperbaiki).",
+        Content = "Blast Power makin tinggi = korban makin tinggi & jauh terpental.",
     })
 
     -- ================================================
@@ -1028,8 +1133,10 @@ local function MainScript()
         if targetPlayer == plr then
             targetPlayer = nil
             selectionMode = nil
-            StopChase()
+            if not attackAllMode then StopChase() end
         end
+        if autoTarget == plr then autoTarget = nil end
+        recentlyAttacked[plr] = nil
         if lastNotifiedTarget == plr then lastNotifiedTarget = nil end
         task.wait(0.5) RefreshDrop("")
     end)
