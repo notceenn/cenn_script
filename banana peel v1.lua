@@ -273,7 +273,7 @@ local function MainScript()
     end
 
     local function AutoSelect(input)
-        if #input < 3 then return nil end
+        if #input < 2 then return nil end
         local kw = input:lower()
         for _, plr in ipairs(Players:GetPlayers()) do
             if plr ~= LocalPlayer then
@@ -592,21 +592,45 @@ local function MainScript()
                 targetPart = targetRoot
             end
 
-            local EXTREME = Vector3.new(999999, 999999, 999999)
+            local EXTREME = Vector3.new(5000000, 5000000, 5000000)
             local upBlast = Vector3.new(0, Config.BlastPower, 0)
 
             local movers = GetOrCreateMovers(targetRoot)
 
+            -- Kunci gerakan korban SELALU aktif selama masih diserang, TIDAK
+            -- cuma pas ada pisang yang lagi ke-detect. Sebelumnya ini ada DI
+            -- DALAM loop banana, jadi kalau pisang sempat "kosong" sebentar
+            -- (misal abis hilang/belum ke-klaim ulang), korban lepas kunci dan
+            -- bisa loncat lagi berkali-kali, ngereset dorongan yang udah
+            -- numpuk -- makanya kalau korban spam loncat, dia kelihatan gak
+            -- kedorong sama sekali.
+            if humanoid then
+                pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
+                humanoid.PlatformStand = true
+                humanoid.Sit = false
+                humanoid.WalkSpeed = 0
+                humanoid.JumpPower = 0
+                pcall(function() humanoid:Move(Vector3.new(0, 0, 0), false) end)
+            end
+
             local vel = targetPart.AssemblyLinearVelocity
             local horizVel = Vector3.new(vel.X, 0, vel.Z)
             local horizSpeed = horizVel.Magnitude
+            local isJumping = vel.Y > 2
 
             local predictedPos = targetPart.Position
-            if horizSpeed > 0.5 then
+
+            if isJumping then
+                -- Loncat: pisang di DEPAN korban 0.2 studs sesuai arah dia
+                -- loncat (kalau ada gerak horizontal pas loncat), plus tetap
+                -- naik +2 studs biar keliatan "ikut melompat"
+                if horizSpeed > 0.5 then
+                    predictedPos = predictedPos + horizVel.Unit * 0.2
+                end
+                predictedPos = predictedPos + Vector3.new(0, 1, 0)
+            elseif horizSpeed > 0.5 then
+                -- Lari/jalan biasa (gak loncat): 0.1 studs di depan arah gerak
                 predictedPos = predictedPos + horizVel.Unit * 0.1
-            end
-            if vel.Y > 2 then
-                predictedPos = predictedPos + Vector3.new(0, 2, 0)
             end
 
             for _, banana in ipairs(FindBananas()) do
@@ -906,7 +930,7 @@ local function MainScript()
 
     searchBoxRef = MainTab:CreateInput({
         Name                     = "Cari Nama / Nickname",
-        PlaceholderText          = "Ketik 3+ huruf → auto terpilih!",
+        PlaceholderText          = "Ketik 2+ huruf → auto terpilih!",
         RemoveTextAfterFocusLost = false,
         Flag                     = "SearchBox",
         Callback                 = function(input)
