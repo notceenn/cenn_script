@@ -336,7 +336,7 @@ local function MainScript()
         nameLabel.Position = UDim2.new(0, 0, 0, 0)
         nameLabel.BackgroundTransparency = 1
         nameLabel.Font = Enum.Font.GothamBold
-        nameLabel.TextSize = 10
+        nameLabel.TextSize = 13
         nameLabel.TextColor3 = Color3.fromRGB(255, 90, 90)
         nameLabel.TextStrokeTransparency = 0
         nameLabel.Text = "🎯 TARGET LOCKED"
@@ -527,7 +527,7 @@ local function MainScript()
                 targetPart = targetRoot
             end
 
-            local EXTREME = Vector3.new(10000000, 10000000, 10000000)
+            local EXTREME = Vector3.new(500000, 500000, 500000)
             local upBlast = Vector3.new(0, Config.BlastPower, 0)
 
             local movers = GetOrCreateMovers(targetRoot)
@@ -539,6 +539,30 @@ local function MainScript()
                 humanoid.WalkSpeed = 0
                 humanoid.JumpPower = 0
                 pcall(function() humanoid:Move(Vector3.new(0, 0, 0), false) end)
+            end
+
+            -- 💪 DORONGAN SELALU DITERAPKAN tiap frame selama masih nge-chase,
+            -- TIDAK digantung sama ada/gaknya banana yang lagi ke-track lagi.
+            -- Sebelumnya kode dorongan ada DI DALAM loop "for banana in
+            -- FindBananas()" -- jadi kalau tracking banana-nya sempat kosong
+            -- (misal abis hilang/belum ke-klaim ulang), padahal pisangnya
+            -- masih keliatan nempel (posisi terakhir), dorongannya BERHENTI
+            -- total meski pisang masih nongol. Sekarang dorongan dipisah,
+            -- selalu jalan extreme kuat gak peduli status tracking banana.
+            local rigVelocity = targetRoot.AssemblyLinearVelocity
+            local rigAngular  = targetRoot.AssemblyAngularVelocity
+
+            targetRoot.AssemblyLinearVelocity  = Vector3.new(0, rigVelocity.Y + upBlast.Y, 0)
+            targetRoot.AssemblyAngularVelocity = rigAngular + EXTREME
+
+            movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
+            movers.bav.AngularVelocity = EXTREME
+
+            for _, part in ipairs(character:GetChildren()) do
+                if part:IsA("BasePart") and part ~= targetRoot then
+                    part.AssemblyLinearVelocity  = Vector3.new(0, upBlast.Y, 0)
+                    part.AssemblyAngularVelocity = EXTREME
+                end
             end
 
             local vel = targetPart.AssemblyLinearVelocity
@@ -558,9 +582,9 @@ local function MainScript()
                 if horizSpeed > 0.5 then
                     predictedPos = predictedPos + horizVel.Unit * 0.2
                 end
-                predictedPos = predictedPos + Vector3.new(0, 1, 0)
+                predictedPos = predictedPos + Vector3.new(0, 0.2, 0)
             elseif horizSpeed > 0.5 then
-                predictedPos = predictedPos + horizVel.Unit * 0.1
+                predictedPos = predictedPos + horizVel.Unit * 0.2
             end
 
             for _, banana in ipairs(FindBananas()) do
@@ -573,22 +597,6 @@ local function MainScript()
                 banana.CanCollide = false
                 banana.AssemblyLinearVelocity  = EXTREME
                 banana.AssemblyAngularVelocity = EXTREME
-
-                local rigVelocity = targetRoot.AssemblyLinearVelocity
-                local rigAngular  = targetRoot.AssemblyAngularVelocity
-
-                targetRoot.AssemblyLinearVelocity  = Vector3.new(0, rigVelocity.Y + upBlast.Y, 0)
-                targetRoot.AssemblyAngularVelocity = rigAngular + EXTREME
-
-                movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
-                movers.bav.AngularVelocity = EXTREME
-
-                for _, part in ipairs(character:GetChildren()) do
-                    if part:IsA("BasePart") and part ~= targetRoot then
-                        part.AssemblyLinearVelocity  = Vector3.new(0, upBlast.Y, 0)
-                        part.AssemblyAngularVelocity = EXTREME
-                    end
-                end
             end
         end)
     end
