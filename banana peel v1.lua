@@ -53,7 +53,7 @@ local function ShowKeyGate(onSuccess)
     local Card = Instance.new("Frame")
     Card.Size = UDim2.new(0, 380, 0, 250)
     Card.Position = UDim2.new(0.5, -190, 0.5, -125)
-    Card.BackgroundColor3 = Color3.fromRGB(24, 12, 40)
+    Card.BackgroundColor3 = Color3.fromRGB(10, 28, 32)
     Card.BorderSizePixel = 0
     Card.Parent = ScreenGui
 
@@ -62,7 +62,7 @@ local function ShowKeyGate(onSuccess)
     corner.Parent = Card
 
     local stroke = Instance.new("UIStroke")
-    stroke.Color = Color3.fromRGB(140, 60, 255)
+    stroke.Color = Color3.fromRGB(40, 220, 235)
     stroke.Thickness = 1.5
     stroke.Parent = Card
 
@@ -92,7 +92,7 @@ local function ShowKeyGate(onSuccess)
     local InputHolder = Instance.new("Frame")
     InputHolder.Size = UDim2.new(1, -40, 0, 42)
     InputHolder.Position = UDim2.new(0, 20, 0, 96)
-    InputHolder.BackgroundColor3 = Color3.fromRGB(38, 18, 65)
+    InputHolder.BackgroundColor3 = Color3.fromRGB(14, 40, 46)
     InputHolder.BorderSizePixel = 0
     InputHolder.Parent = Card
 
@@ -101,7 +101,7 @@ local function ShowKeyGate(onSuccess)
     ihCorner.Parent = InputHolder
 
     local ihStroke = Instance.new("UIStroke")
-    ihStroke.Color = Color3.fromRGB(90, 60, 130)
+    ihStroke.Color = Color3.fromRGB(30, 90, 100)
     ihStroke.Thickness = 1.5
     ihStroke.Parent = InputHolder
 
@@ -119,10 +119,10 @@ local function ShowKeyGate(onSuccess)
     KeyBox.Parent = InputHolder
 
     KeyBox.Focused:Connect(function()
-        ihStroke.Color = Color3.fromRGB(170, 100, 255)
+        ihStroke.Color = Color3.fromRGB(60, 220, 235)
     end)
     KeyBox.FocusLost:Connect(function()
-        ihStroke.Color = Color3.fromRGB(90, 60, 130)
+        ihStroke.Color = Color3.fromRGB(30, 90, 100)
     end)
 
     local Status = Instance.new("TextLabel")
@@ -139,7 +139,7 @@ local function ShowKeyGate(onSuccess)
     local SubmitBtn = Instance.new("TextButton")
     SubmitBtn.Size = UDim2.new(1, -40, 0, 40)
     SubmitBtn.Position = UDim2.new(0, 20, 0, 172)
-    SubmitBtn.BackgroundColor3 = Color3.fromRGB(140, 60, 255)
+    SubmitBtn.BackgroundColor3 = Color3.fromRGB(30, 190, 210)
     SubmitBtn.Text = "MASUK"
     SubmitBtn.Font = Enum.Font.GothamBold
     SubmitBtn.TextSize = 15
@@ -196,7 +196,7 @@ local function ShowKeyGate(onSuccess)
             stroke.Color = Color3.fromRGB(255, 70, 70)
             ShakeCard()
             task.wait(0.4)
-            stroke.Color = Color3.fromRGB(140, 60, 255)
+            stroke.Color = Color3.fromRGB(40, 220, 235)
             processing = false
         end
     end
@@ -214,7 +214,7 @@ end
 local function MainScript()
 
     local Config = {
-        BlastPower = 6000000,
+        BlastPower = 15000000, -- super extreme (tapi angular udah gak numpuk lagi jadi tetap stabil)
         TargetPart = "HumanoidRootPart",
     }
     local targetPlayer  = nil
@@ -527,12 +527,55 @@ local function MainScript()
                 targetPart = targetRoot
             end
 
+            -- Pastikan HumanoidRootPart gak ke-anchor & network owner tetap
+            -- di kita tiap frame -- beberapa avatar kadang "diam gak mental"
+            -- karena ownership fisikanya kerebut balik atau part-nya sempat
+            -- ke-anchor oleh sistem lain
+            pcall(function()
+                if targetRoot.Anchored then targetRoot.Anchored = false end
+                targetRoot:SetNetworkOwner(LocalPlayer)
+            end)
+
+            local isInSeat = humanoid and humanoid.SeatPart ~= nil
+
+            -- 📸 Baca kecepatan ASLI korban DULU, SEBELUM kita nimpa
+            -- velocity-nya sendiri buat dorongan. Kalau dibaca SETELAH
+            -- dorongan diterapkan, yang kebaca itu velocity dorongan KITA
+            -- sendiri (bukan gerakan asli korban) -- itu yang bikin sistem
+            -- selalu ngira korban "lagi loncat" terus, gak bisa bedain
+            -- diam/jalan/loncat yang sebenarnya.
+            local vel = targetPart.AssemblyLinearVelocity
+            local horizVel = Vector3.new(vel.X, 0, vel.Z)
+            local horizSpeed = horizVel.Magnitude
+            local isJumping = vel.Y > 2
+            local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
+
+            local predictedPos = targetPart.Position
+
+            if isSitting then
+                -- Pas duduk, HumanoidRootPart posisinya suka "ketarik" ke
+                -- atas relatif ke visual badan yang lagi nekuk -- turunin
+                -- dikit biar pisang tetap di perut, bukan nongol di kepala
+                predictedPos = predictedPos + Vector3.new(0, -1.5, 0)
+            elseif isJumping then
+                if horizSpeed > 0.5 then
+                    predictedPos = predictedPos + horizVel.Unit * 0.2
+                end
+                predictedPos = predictedPos + Vector3.new(0, 0.2, 0)
+            elseif horizSpeed > 0.5 then
+                predictedPos = predictedPos + horizVel.Unit * 0.2
+            end
+
             local EXTREME = Vector3.new(500000, 500000, 500000)
             local upBlast = Vector3.new(0, Config.BlastPower, 0)
 
             local movers = GetOrCreateMovers(targetRoot)
 
-            if humanoid then
+            -- Kalau lagi duduk di Seat/VehicleSeat BENERAN (gerobak, ayunan,
+            -- dll), JANGAN paksa PlatformStand/lock -- itu bentrok sama weld
+            -- bawaan seat-nya dan bikin badan keliatan "melayang"/glitch.
+            -- Cukup dilewatin, gak diapa-apain fisiknya.
+            if humanoid and not isInSeat then
                 pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
                 humanoid.PlatformStand = true
                 humanoid.Sit = false
@@ -549,19 +592,22 @@ local function MainScript()
             -- masih keliatan nempel (posisi terakhir), dorongannya BERHENTI
             -- total meski pisang masih nongol. Sekarang dorongan dipisah,
             -- selalu jalan extreme kuat gak peduli status tracking banana.
-            local rigVelocity = targetRoot.AssemblyLinearVelocity
-            local rigAngular  = targetRoot.AssemblyAngularVelocity
+            -- (Kecuali kalau lagi di Seat beneran -- lihat komentar di atas)
+            if not isInSeat then
+                local rigVelocity = targetRoot.AssemblyLinearVelocity
+                local rigAngular  = targetRoot.AssemblyAngularVelocity
 
-            targetRoot.AssemblyLinearVelocity  = Vector3.new(0, rigVelocity.Y + upBlast.Y, 0)
-            targetRoot.AssemblyAngularVelocity = rigAngular + EXTREME
+                targetRoot.AssemblyLinearVelocity  = Vector3.new(0, rigVelocity.Y + upBlast.Y, 0)
+                targetRoot.AssemblyAngularVelocity = EXTREME
 
-            movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
-            movers.bav.AngularVelocity = EXTREME
+                movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
+                movers.bav.AngularVelocity = EXTREME
 
-            for _, part in ipairs(character:GetChildren()) do
-                if part:IsA("BasePart") and part ~= targetRoot then
-                    part.AssemblyLinearVelocity  = Vector3.new(0, upBlast.Y, 0)
-                    part.AssemblyAngularVelocity = EXTREME
+                for _, part in ipairs(character:GetChildren()) do
+                    if part:IsA("BasePart") and part ~= targetRoot then
+                        part.AssemblyLinearVelocity  = Vector3.new(0, upBlast.Y, 0)
+                        part.AssemblyAngularVelocity = EXTREME
+                    end
                 end
             end
 
@@ -793,15 +839,15 @@ local function MainScript()
 
     local UIS = game:GetService("UserInputService")
 
-    local CLR_BG      = Color3.fromRGB(18, 8, 38)
-    local CLR_PANEL   = Color3.fromRGB(28, 10, 55)
-    local CLR_BORDER  = Color3.fromRGB(140, 60, 255)
-    local CLR_ON      = Color3.fromRGB(120, 40, 235)
-    local CLR_OFF     = Color3.fromRGB(40, 15, 80)
+    local CLR_BG      = Color3.fromRGB(6, 22, 26)
+    local CLR_PANEL   = Color3.fromRGB(10, 34, 40)
+    local CLR_BORDER  = Color3.fromRGB(40, 220, 235)
+    local CLR_ON      = Color3.fromRGB(20, 160, 180)
+    local CLR_OFF     = Color3.fromRGB(12, 40, 46)
     local CLR_RED     = Color3.fromRGB(170, 25, 25)
     local CLR_TXT     = Color3.fromRGB(255, 255, 255)
-    local CLR_TITLE   = Color3.fromRGB(220, 180, 255)
-    local CLR_INPBG   = Color3.fromRGB(14, 5, 30)
+    local CLR_TITLE   = Color3.fromRGB(160, 245, 250)
+    local CLR_INPBG   = Color3.fromRGB(6, 18, 22)
 
     local gui = Instance.new("ScreenGui")
     gui.Name            = "S3GSHub"
