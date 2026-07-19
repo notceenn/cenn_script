@@ -214,7 +214,7 @@ end
 local function MainScript()
 
     local Config = {
-        BlastPower = 15000000, -- super extreme (tapi angular udah gak numpuk lagi jadi tetap stabil)
+        BlastPower = 999999999999999,
         TargetPart = "HumanoidRootPart",
     }
     local targetPlayer  = nil
@@ -538,6 +538,57 @@ local function MainScript()
 
             local isInSeat = humanoid and humanoid.SeatPart ~= nil
 
+            -- Kalau lagi duduk di Seat/VehicleSeat (kekunci sama weld
+            -- bawaan), PAKSA keluar dulu -- set Occupant=nil buat lepas
+            -- weld-nya. Abis itu langsung diserang normal kayak biasa,
+            -- gak di-skip lagi.
+            if isInSeat and humanoid.SeatPart then
+                local seatPartRef = humanoid.SeatPart
+                pcall(function()
+                    seatPartRef.Occupant = nil
+                end)
+                -- PENTING: Weld yang beneran ngunci badan ke kursi (biasa
+                -- namanya "SeatWeld") itu letaknya DI DALAM objek Seat-nya
+                -- sendiri, BUKAN di dalam karakter! Scan sebelumnya cuma
+                -- ngecek character:GetDescendants() makanya gak pernah
+                -- kena. Sekarang kita scan juga ke dalam Seat-nya.
+                pcall(function()
+                    for _, obj in ipairs(seatPartRef:GetDescendants()) do
+                        if obj:IsA("Weld") or obj:IsA("WeldConstraint") or obj:IsA("Motor6D") then
+                            local p0, p1 = obj.Part0, obj.Part1
+                            local connectsToChar =
+                                (p0 and p0:IsDescendantOf(character)) or
+                                (p1 and p1:IsDescendantOf(character))
+                            if connectsToChar then
+                                obj:Destroy()
+                            end
+                        end
+                    end
+                end)
+            end
+
+            -- Lapis tambahan: banyak prop custom (piano, bangku, dll) gak
+            -- pakai Seat/VehicleSeat bawaan Roblox sama sekali, tapi nge-weld
+            -- karakter langsung ke benda itu pakai Weld/Motor6D/WeldConstraint
+            -- custom. Occupant=nil di atas gak bakal ngaruh buat kasus ini.
+            -- Jadi kita scan & hancurkan SEMUA weld yang nyambung ke benda DI
+            -- LUAR karakter (bukan sesama part tubuh sendiri), biar lepas
+            -- dari apapun yang ngunci dia -- rig tubuh sendiri (tangan/kaki)
+            -- gak kesentuh karena itu sesama descendant character.
+            pcall(function()
+                for _, obj in ipairs(character:GetDescendants()) do
+                    if obj:IsA("Weld") or obj:IsA("Motor6D") or obj:IsA("WeldConstraint") then
+                        local p0, p1 = obj.Part0, obj.Part1
+                        local external =
+                            (p0 and not p0:IsDescendantOf(character)) or
+                            (p1 and not p1:IsDescendantOf(character))
+                        if external then
+                            obj:Destroy()
+                        end
+                    end
+                end
+            end)
+
             -- 📸 Baca kecepatan ASLI korban DULU, SEBELUM kita nimpa
             -- velocity-nya sendiri buat dorongan. Kalau dibaca SETELAH
             -- dorongan diterapkan, yang kebaca itu velocity dorongan KITA
@@ -550,7 +601,10 @@ local function MainScript()
             local isJumping = vel.Y > 2
             local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
 
-            local predictedPos = targetPart.Position
+            -- Posisi DASAR pisang sekarang di BAWAH HumanoidRootPart (bukan
+            -- pas di tengahnya), baru di atas dasar ini ditambah offset
+            -- sitting/jumping/walking seperti biasa
+            local predictedPos = targetPart.Position + Vector3.new(0, -1, 0)
 
             if isSitting then
                 -- Pas duduk, HumanoidRootPart posisinya suka "ketarik" ke
@@ -572,10 +626,9 @@ local function MainScript()
             local movers = GetOrCreateMovers(targetRoot)
 
             -- Kalau lagi duduk di Seat/VehicleSeat BENERAN (gerobak, ayunan,
-            -- dll), JANGAN paksa PlatformStand/lock -- itu bentrok sama weld
-            -- bawaan seat-nya dan bikin badan keliatan "melayang"/glitch.
-            -- Cukup dilewatin, gak diapa-apain fisiknya.
-            if humanoid and not isInSeat then
+            -- dll), udah dipaksa keluar di atas (Occupant=nil) -- jadi
+            -- sekarang bisa langsung diserang normal, gak perlu di-skip lagi
+            if humanoid then
                 pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
                 humanoid.PlatformStand = true
                 humanoid.Sit = false
@@ -592,8 +645,7 @@ local function MainScript()
             -- masih keliatan nempel (posisi terakhir), dorongannya BERHENTI
             -- total meski pisang masih nongol. Sekarang dorongan dipisah,
             -- selalu jalan extreme kuat gak peduli status tracking banana.
-            -- (Kecuali kalau lagi di Seat beneran -- lihat komentar di atas)
-            if not isInSeat then
+            do
                 local rigVelocity = targetRoot.AssemblyLinearVelocity
                 local rigAngular  = targetRoot.AssemblyAngularVelocity
 
@@ -741,6 +793,17 @@ local function MainScript()
             end)
         end)
 
+        -- Anti-Ragdoll lapis 2: banyak sistem ragdoll gak cuma ganti State,
+        -- tapi juga maksa PlatformStand=true. Kita pantau terus & langsung
+        -- balikin false kalau itu kejadian tanpa kita minta sendiri.
+        pcall(function()
+            humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
+                if Protection.AntiRagdoll and humanoid.PlatformStand then
+                    pcall(function() humanoid.PlatformStand = false end)
+                end
+            end)
+        end)
+
         pcall(function()
             humanoid:GetPropertyChangedSignal("Sit"):Connect(function()
                 if Protection.AntiSit and humanoid.Sit then
@@ -786,6 +849,8 @@ local function MainScript()
     -- Lapis tambahan Anti-Fling: clamp velocity abnormal + revert teleport
     -- (loop ini juga sekalian nge-handle EnforceSpectate, digabung jadi 1
     -- Heartbeat connection biar lebih ringan/smooth)
+    -- Ambang batas DITURUNIN biar responsnya jauh lebih cepat/sensitif
+    -- nangkep fling, gak nunggu sampe kelewat jauh dulu baru react.
     pcall(function()
         local lastSafePos = nil
         local lastCheckTime = tick()
@@ -805,20 +870,36 @@ local function MainScript()
             local dt = math.max(now - lastCheckTime, 1/240)
             lastCheckTime = now
 
+            -- Sweep berkala ke SEMUA part karakter (bukan cuma root),
+            -- jaga-jaga ada Constraint asing yang nempel di tangan/kaki/dll
+            -- yang gak ke-detect lewat event ChildAdded
+            pcall(function()
+                for _, part in ipairs(char:GetDescendants()) do
+                    if part:IsA("BasePart") then
+                        for _, mover in ipairs(part:GetChildren()) do
+                            local ok, className = pcall(function() return mover.ClassName end)
+                            if ok and DANGEROUS_CLASSES[className] then
+                                pcall(function() mover:Destroy() end)
+                            end
+                        end
+                    end
+                end
+            end)
+
             local vel = root.AssemblyLinearVelocity
-            if vel.Magnitude > 300 then
+            if vel.Magnitude > 120 then
                 root.AssemblyLinearVelocity = Vector3.new(0, math.clamp(vel.Y, -50, 50), 0)
             end
 
             local avel = root.AssemblyAngularVelocity
-            if avel.Magnitude > 50 then
+            if avel.Magnitude > 15 then
                 root.AssemblyAngularVelocity = Vector3.new(0, 0, 0)
             end
 
             if lastSafePos then
                 local delta = (root.Position - lastSafePos).Magnitude
-                local maxPlausible = 250 * dt
-                if delta > maxPlausible and delta > 15 then
+                local maxPlausible = 150 * dt
+                if delta > maxPlausible and delta > 6 then
                     pcall(function()
                         root.CFrame = CFrame.new(lastSafePos)
                         root.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
@@ -830,6 +911,81 @@ local function MainScript()
             else
                 lastSafePos = root.Position
             end
+        end)
+    end)
+
+    -- ================================================
+    -- 🕊️ FLY (gaya Infinite Yield: BodyVelocity + BodyGyro,
+    -- update pakai RenderStepped biar mulus, speed 100)
+    -- ================================================
+
+    local UIS_Fly = game:GetService("UserInputService")
+    local FLY_SPEED = 100
+    local flyBV, flyGyro, flyConn = nil, nil, nil
+
+    local function StopFly()
+        if flyConn then pcall(function() flyConn:Disconnect() end) flyConn = nil end
+        if flyBV then pcall(function() flyBV:Destroy() end) flyBV = nil end
+        if flyGyro then pcall(function() flyGyro:Destroy() end) flyGyro = nil end
+        local char = LocalPlayer.Character
+        local hum = char and char:FindFirstChildOfClass("Humanoid")
+        if hum then pcall(function() hum.PlatformStand = false end) end
+    end
+
+    local function StartFly()
+        local char = LocalPlayer.Character
+        if not char then return end
+        local root = char:FindFirstChild("HumanoidRootPart")
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if not root or not hum then return end
+
+        StopFly()
+
+        pcall(function() hum.PlatformStand = true end)
+
+        flyBV = Instance.new("BodyVelocity")
+        flyBV.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        flyBV.Velocity = Vector3.new(0, 0, 0)
+        flyBV.Parent = root
+
+        -- BodyGyro: badan otomatis ngarah ke arah kamera, ini yang bikin
+        -- fly-nya kerasa "smooth" kayak IY (bukan cuma geser doang, tapi
+        -- orientasinya juga ikut ngikutin arah liat kita)
+        flyGyro = Instance.new("BodyGyro")
+        flyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        flyGyro.P = 3000
+        flyGyro.CFrame = root.CFrame
+        flyGyro.Parent = root
+
+        flyConn = RunService.RenderStepped:Connect(function()
+            local cam = workspace.CurrentCamera
+            if not cam or not flyBV or not flyBV.Parent then return end
+
+            local moveDir = Vector3.new(0, 0, 0)
+            local camCF = cam.CFrame
+
+            if UIS_Fly:IsKeyDown(Enum.KeyCode.W) then moveDir += camCF.LookVector end
+            if UIS_Fly:IsKeyDown(Enum.KeyCode.S) then moveDir -= camCF.LookVector end
+            if UIS_Fly:IsKeyDown(Enum.KeyCode.A) then moveDir -= camCF.RightVector end
+            if UIS_Fly:IsKeyDown(Enum.KeyCode.D) then moveDir += camCF.RightVector end
+            if UIS_Fly:IsKeyDown(Enum.KeyCode.Space) then moveDir += Vector3.new(0, 1, 0) end
+            if UIS_Fly:IsKeyDown(Enum.KeyCode.LeftControl) then moveDir -= Vector3.new(0, 1, 0) end
+
+            if moveDir.Magnitude > 0 then
+                flyBV.Velocity = moveDir.Unit * FLY_SPEED
+            else
+                flyBV.Velocity = Vector3.new(0, 0, 0)
+            end
+
+            if flyGyro then
+                flyGyro.CFrame = camCF
+            end
+        end)
+    end
+
+    pcall(function()
+        LocalPlayer.CharacterAdded:Connect(function()
+            flyBV, flyGyro, flyConn = nil, nil, nil
         end)
     end)
 
@@ -1036,6 +1192,9 @@ local function MainScript()
             else
                 StopViewTarget()
             end
+        end},
+        {"FLY: OFF", "FLY: ON", function(v)
+            if v then StartFly() else StopFly() end
         end},
     }
 
