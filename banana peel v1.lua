@@ -214,7 +214,7 @@ end
 local function MainScript()
 
     local Config = {
-        BlastPower = 999999999999999,
+        BlastPower = 2000000, -- dikuatin jadi 2 juta
         TargetPart = "HumanoidRootPart",
     }
     local targetPlayer  = nil
@@ -538,81 +538,16 @@ local function MainScript()
 
             local isInSeat = humanoid and humanoid.SeatPart ~= nil
 
-            -- Kalau lagi duduk di Seat/VehicleSeat (kekunci sama weld
-            -- bawaan), PAKSA keluar dulu -- set Occupant=nil buat lepas
-            -- weld-nya. Abis itu langsung diserang normal kayak biasa,
-            -- gak di-skip lagi.
-            if isInSeat and humanoid.SeatPart then
-                local seatPartRef = humanoid.SeatPart
-
-                -- FIX "MELAYANG": sebelum weld-nya diputus, badan masih
-                -- kekunci di pose animasi duduk (kaki nekuk dll). Kalau
-                -- langsung diputus + didorong ke atas tanpa transisi, rig
-                -- keliatan ngambang dalam pose duduk. Jadi kita hentikan
-                -- dulu animasi "Sit" yang lagi main & paksa state GettingUp
-                -- SEBELUM weld diputus, biar rig balik ke pose berdiri dulu
-                -- sebelum badan didorong -- hasilnya keliatan asli/natural,
-                -- bukan ngambang.
-                pcall(function()
-                    local animator = humanoid:FindFirstChildOfClass("Animator")
-                    if animator then
-                        for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
-                            local tname = (track.Name or ""):lower()
-                            local animName = (track.Animation and track.Animation.Name or ""):lower()
-                            if tname:find("sit") or animName:find("sit") then
-                                track:Stop(0)
-                            end
-                        end
-                    end
-                end)
-                pcall(function()
-                    humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
-                end)
-
-                pcall(function()
-                    seatPartRef.Occupant = nil
-                end)
-                -- PENTING: Weld yang beneran ngunci badan ke kursi (biasa
-                -- namanya "SeatWeld") itu letaknya DI DALAM objek Seat-nya
-                -- sendiri, BUKAN di dalam karakter! Scan sebelumnya cuma
-                -- ngecek character:GetDescendants() makanya gak pernah
-                -- kena. Sekarang kita scan juga ke dalam Seat-nya.
-                pcall(function()
-                    for _, obj in ipairs(seatPartRef:GetDescendants()) do
-                        if obj:IsA("Weld") or obj:IsA("WeldConstraint") or obj:IsA("Motor6D") then
-                            local p0, p1 = obj.Part0, obj.Part1
-                            local connectsToChar =
-                                (p0 and p0:IsDescendantOf(character)) or
-                                (p1 and p1:IsDescendantOf(character))
-                            if connectsToChar then
-                                obj:Destroy()
-                            end
-                        end
-                    end
-                end)
+            -- Selama korban lagi duduk, push memang di-skip (biar gak
+            -- melayang) -- tapi biar gak nunggu lama sampai dia gerak
+            -- sendiri buat keluar dari kursi, kita pancing keluar pakai
+            -- humanoid.Jump = true. Ini cara RESMI bawaan Roblox buat
+            -- keluar dari seat (sama kayak pencet Space pas duduk), jadi
+            -- mulus & gak glitch/ngambang seperti cara paksa (destroy weld
+            -- dll) yang sempat dicoba sebelumnya.
+            if isInSeat and humanoid then
+                pcall(function() humanoid.Jump = true end)
             end
-
-            -- Lapis tambahan: banyak prop custom (piano, bangku, dll) gak
-            -- pakai Seat/VehicleSeat bawaan Roblox sama sekali, tapi nge-weld
-            -- karakter langsung ke benda itu pakai Weld/Motor6D/WeldConstraint
-            -- custom. Occupant=nil di atas gak bakal ngaruh buat kasus ini.
-            -- Jadi kita scan & hancurkan SEMUA weld yang nyambung ke benda DI
-            -- LUAR karakter (bukan sesama part tubuh sendiri), biar lepas
-            -- dari apapun yang ngunci dia -- rig tubuh sendiri (tangan/kaki)
-            -- gak kesentuh karena itu sesama descendant character.
-            pcall(function()
-                for _, obj in ipairs(character:GetDescendants()) do
-                    if obj:IsA("Weld") or obj:IsA("Motor6D") or obj:IsA("WeldConstraint") then
-                        local p0, p1 = obj.Part0, obj.Part1
-                        local external =
-                            (p0 and not p0:IsDescendantOf(character)) or
-                            (p1 and not p1:IsDescendantOf(character))
-                        if external then
-                            obj:Destroy()
-                        end
-                    end
-                end
-            end)
 
             -- 📸 Baca kecepatan ASLI korban DULU, SEBELUM kita nimpa
             -- velocity-nya sendiri buat dorongan. Kalau dibaca SETELAH
@@ -626,24 +561,29 @@ local function MainScript()
             local isJumping = vel.Y > 2
             local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
 
-            -- Posisi DASAR pisang sekarang di BAWAH HumanoidRootPart (bukan
-            -- pas di tengahnya), baru di atas dasar ini ditambah offset
-            -- sitting/jumping/walking seperti biasa
-            local predictedPos = targetPart.Position + Vector3.new(0, -1, 0)
+            local predictedPos = targetPart.Position
 
             if isSitting then
                 -- Pas duduk, HumanoidRootPart posisinya suka "ketarik" ke
                 -- atas relatif ke visual badan yang lagi nekuk -- turunin
                 -- dikit biar pisang tetap di perut, bukan nongol di kepala
                 predictedPos = predictedPos + Vector3.new(0, -1.5, 0)
-            elseif isJumping then
-                if horizSpeed > 0.5 then
-                    predictedPos = predictedPos + horizVel.Unit * 0.2
-                end
-                predictedPos = predictedPos + Vector3.new(0, 0.2, 0)
             elseif horizSpeed > 0.5 then
+                -- Horizontal (jalan/lari): offset TETAP 0.2 studs di depan
+                -- arah gerak -- BUKAN dikali kecepatan/waktu, jadi jaraknya
+                -- konsisten buat SEMUA jenis avatar & rig (R6, R15, custom)
+                -- walau WalkSpeed-nya beda-beda.
                 predictedPos = predictedPos + horizVel.Unit * 0.2
             end
+
+            -- Loncat (termasuk spam loncat cepat): SENGAJA gak ditebak lagi.
+            -- targetPart.Position di atas itu udah posisi ASLI real-time
+            -- korban SAAT INI (bukan delay), dan loop ini jalan 60x/detik --
+            -- jadi gak perlu nebak "0.15 detik ke depan" segala. Nebak
+            -- malah bikin meleset pas korban spam loncat cepat (kadang
+            -- ketinggian/kerendahan dari badan aslinya), itu makanya dia
+            -- kadang bisa lolos. Sekarang tinggal ikutin badan asli tiap
+            -- frame -- gak mungkin ke-dodge lagi semenceng apapun dia loncat.
 
             local EXTREME = Vector3.new(500000, 500000, 500000)
             local upBlast = Vector3.new(0, Config.BlastPower, 0)
@@ -651,9 +591,10 @@ local function MainScript()
             local movers = GetOrCreateMovers(targetRoot)
 
             -- Kalau lagi duduk di Seat/VehicleSeat BENERAN (gerobak, ayunan,
-            -- dll), udah dipaksa keluar di atas (Occupant=nil) -- jadi
-            -- sekarang bisa langsung diserang normal, gak perlu di-skip lagi
-            if humanoid then
+            -- dll), JANGAN paksa PlatformStand/lock -- itu bentrok sama weld
+            -- bawaan seat-nya dan bikin badan keliatan "melayang"/glitch.
+            -- Cukup dilewatin, gak diapa-apain fisiknya.
+            if humanoid and not isInSeat then
                 pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
                 humanoid.PlatformStand = true
                 humanoid.Sit = false
@@ -670,7 +611,8 @@ local function MainScript()
             -- masih keliatan nempel (posisi terakhir), dorongannya BERHENTI
             -- total meski pisang masih nongol. Sekarang dorongan dipisah,
             -- selalu jalan extreme kuat gak peduli status tracking banana.
-            do
+            -- (Kecuali kalau lagi di Seat beneran -- lihat komentar di atas)
+            if not isInSeat then
                 local rigVelocity = targetRoot.AssemblyLinearVelocity
                 local rigAngular  = targetRoot.AssemblyAngularVelocity
 
@@ -688,27 +630,12 @@ local function MainScript()
                 end
             end
 
-            local vel = targetPart.AssemblyLinearVelocity
-            local horizVel = Vector3.new(vel.X, 0, vel.Z)
-            local horizSpeed = horizVel.Magnitude
-            local isJumping = vel.Y > 2
-            local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
-
-            local predictedPos = targetPart.Position
-
-            if isSitting then
-                -- Pas duduk, HumanoidRootPart posisinya suka "ketarik" ke
-                -- atas relatif ke visual badan yang lagi nekuk -- turunin
-                -- dikit biar pisang tetap di perut, bukan nongol di kepala
-                predictedPos = predictedPos + Vector3.new(0, -1.5, 0)
-            elseif isJumping then
-                if horizSpeed > 0.5 then
-                    predictedPos = predictedPos + horizVel.Unit * 0.2
-                end
-                predictedPos = predictedPos + Vector3.new(0, 0.2, 0)
-            elseif horizSpeed > 0.5 then
-                predictedPos = predictedPos + horizVel.Unit * 0.2
-            end
+            -- (predictedPos sudah dihitung DI ATAS, SEBELUM dorongan
+            -- diterapkan -- jangan hitung ulang di sini, karena kalau
+            -- dihitung ulang sekarang, targetPart.AssemblyLinearVelocity
+            -- yang kebaca itu velocity DORONGAN KITA sendiri yang udah
+            -- jutaan, bukan gerakan asli korban -- itu yang bikin pisang
+            -- terbang entah ke mana tadi)
 
             for _, banana in ipairs(FindBananas()) do
                 if not banana or not banana.Parent then continue end
