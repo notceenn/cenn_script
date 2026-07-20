@@ -214,10 +214,10 @@ end
 local function MainScript()
 
     local Config = {
-        BlastPower     = 2000000, -- dikuatin jadi 2 juta
+        BlastPower     = 2000000,
         TargetPart     = "HumanoidRootPart",
-        AutoAll        = false, -- Serang Semua (bergantian)
-        AttackDuration = 1.5,   -- detik per target sebelum pindah ke berikutnya
+        AutoAll        = false,
+        AttackDuration = 1.5,
     }
     local targetPlayer  = nil
     local active        = false
@@ -246,7 +246,7 @@ local function MainScript()
     end
 
     -- ================================================
-    -- 🔥 SERANG SEMUA: kumpulkan target valid, skip yang
+    -- 🔥 SERANG SEMUA: kumpulkan target valid, SKIP yang
     -- lagi duduk, urutkan dari yang paling dekat
     -- ================================================
     local function GetValidTargets()
@@ -258,7 +258,7 @@ local function MainScript()
             if plr ~= LocalPlayer and plr.Character then
                 local root = plr.Character:FindFirstChild("HumanoidRootPart")
                 local hum  = plr.Character:FindFirstChildOfClass("Humanoid")
-                -- Skip yang lagi duduk/seated -- jangan diserang sama sekali
+                -- Mode Serang Semua: skip yang lagi duduk/seated total
                 local isSeated = hum and (hum.Sit or hum.SeatPart ~= nil)
                 if root and hum and hum.Health > 0 and not isSeated then
                     local part = plr.Character:FindFirstChild(Config.TargetPart)
@@ -364,8 +364,6 @@ local function MainScript()
         victimBillboard = Instance.new("BillboardGui")
         victimBillboard.Name = "BananaDistanceGui"
         victimBillboard.Size = UDim2.new(0, 130, 0, 34)
-        -- Digeser lebih tinggi dari Name ESP (StudsOffset 2.5) supaya gak
-        -- numpuk/nutupin -- "TARGET LOCKED" nongol DI ATAS Name ESP
         victimBillboard.StudsOffset = Vector3.new(0, 4.6, 0)
         victimBillboard.AlwaysOnTop = true
         victimBillboard.Parent = char:FindFirstChild("Head") or root
@@ -396,7 +394,13 @@ local function MainScript()
     end
 
     local function UpdateVictimVisuals(forTarget)
-        if not forTarget or not forTarget.Character then return end
+        if not forTarget then return end
+
+        -- FIX ESP kadang gak balik pas target kembali ke map/render range:
+        -- selama masih target yang sama, TERUS coba self-heal walau
+        -- Character sempat sementara nil (misal lagi respawn/streaming),
+        -- jangan langsung nyerah di awal function.
+        if not forTarget.Character then return end
 
         if currentVisualFor ~= forTarget then
             SetupVictimVisuals(forTarget)
@@ -405,12 +409,16 @@ local function MainScript()
 
         local root = forTarget.Character:FindFirstChild("HumanoidRootPart")
         local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
-        if not root or not myRoot then return end
 
-        if not victimBillboard or not victimBillboard.Parent then
+        -- Kalau root ketemu tapi billboard kita udah gak valid/ke-detach
+        -- (misal karena Head/root lama sempat di-destroy pas streaming),
+        -- langsung bikin ulang -- ini yang bikin ESP "balik lagi" realtime
+        if root and (not victimBillboard or not victimBillboard.Parent) then
             SetupVictimVisuals(forTarget)
             return
         end
+
+        if not root or not myRoot or not victimBillboard or not victimBillboard.Parent then return end
 
         local dist = (root.Position - myRoot.Position).Magnitude
         local label = victimBillboard:FindFirstChild("DistanceLabel")
@@ -452,14 +460,10 @@ local function MainScript()
         isSpectating = false
     end
 
-    -- Heartbeat kecil: SELALU jaga kamera tetap ke target selama isSpectating
-    -- true, jadi walau target respawn/!re/pindah karakter, kamera GAK bakal
-    -- balik ke kamu sendiri sampai kamu OFF-in manual dari tombol
-    -- (digabung sama loop Anti-Fling di bawah jadi 1 Heartbeat aja, biar
-    -- gak ada koneksi event yang numpuk-numpuk -- lebih ringan/smooth)
-
     -- ================================================
-    -- 📡 AUTO RE-ATTACH ESP + SPECTATE saat korban respawn
+    -- 📡 AUTO RE-ATTACH ESP + SPECTATE saat korban respawn/
+    -- kembali ke map -- sekarang PAKAI RETRY BERKALI-KALI
+    -- (bukan cuma sekali WaitForChild) biar lebih realtime
     -- ================================================
 
     local targetCharConn = nil
@@ -472,19 +476,26 @@ local function MainScript()
         if not plr then return end
         targetCharConn = plr.CharacterAdded:Connect(function(newChar)
             task.spawn(function()
-                local root = newChar:WaitForChild("HumanoidRootPart", 5)
-                if root and targetPlayer == plr and active then
-                    SetupVictimVisuals(plr)
-                end
-                if root and targetPlayer == plr and isSpectating then
-                    local hum = newChar:WaitForChild("Humanoid", 5)
-                    local cam = workspace.CurrentCamera
-                    if hum and cam then
-                        pcall(function()
-                            cam.CameraSubject = hum
-                            cam.CameraType = Enum.CameraType.Custom
-                        end)
+                local deadline = tick() + 6
+                while tick() < deadline do
+                    local root = newChar:FindFirstChild("HumanoidRootPart")
+                    if root then
+                        if targetPlayer == plr and active then
+                            SetupVictimVisuals(plr)
+                        end
+                        if targetPlayer == plr and isSpectating then
+                            local hum = newChar:FindFirstChildOfClass("Humanoid")
+                            local cam = workspace.CurrentCamera
+                            if hum and cam then
+                                pcall(function()
+                                    cam.CameraSubject = hum
+                                    cam.CameraType = Enum.CameraType.Custom
+                                end)
+                            end
+                        end
+                        break
                     end
+                    task.wait(0.2)
                 end
             end)
         end)
@@ -545,9 +556,13 @@ local function MainScript()
 
     -- ================================================
     -- 🔥 Serang 1 target (dipakai mode Single & mode Serang
-    -- Semua). jumpBurstState = table {time=...} biar bisa
-    -- diubah dari dalam function (Lua gak ada pass-by-ref
-    -- buat number biasa)
+    -- Semua).
+    --
+    -- FIX: sebelumnya "if isInSeat then return end" berlaku
+    -- buat KEDUA mode, jadi orang duduk gak pernah kena diserang
+    -- sama sekali walau lagi di Mode Manual. Sekarang:
+    --   - Mode Serang Semua -> orang duduk DI-SKIP (gak diserang)
+    --   - Mode Manual       -> orang duduk TETAP diserang normal
     -- ================================================
     local function AttackOneTarget(targetData, jumpBurstState)
         local character = targetData.character
@@ -556,10 +571,6 @@ local function MainScript()
         local humanoid   = targetData.humanoid
         if not character or not targetRoot or not targetPart then return end
 
-        -- Pastikan HumanoidRootPart gak ke-anchor & network owner tetap
-        -- di kita tiap frame -- beberapa avatar kadang "diam gak mental"
-        -- karena ownership fisikanya kerebut balik atau part-nya sempat
-        -- ke-anchor oleh sistem lain
         pcall(function()
             if targetRoot.Anchored then targetRoot.Anchored = false end
             targetRoot:SetNetworkOwner(LocalPlayer)
@@ -567,39 +578,81 @@ local function MainScript()
 
         local isInSeat = humanoid and humanoid.SeatPart ~= nil
 
-        -- Korban lagi duduk/seated: JANGAN diserang sama sekali -- gak
-        -- dipush, gak dipoke Jump, gak diapa-apain. Biarin aja sampai dia
-        -- berdiri sendiri, baru diserang lagi otomatis frame berikutnya.
-        if isInSeat then
+        -- Skip HANYA kalau lagi Mode Serang Semua. Di Mode Manual, lanjut
+        -- terus ke bawah walau lagi duduk -- tetap diserang normal.
+        if isInSeat and Config.AutoAll then
             return
         end
 
-        -- 📸 Baca kecepatan ASLI korban DULU, SEBELUM kita nimpa
-        -- velocity-nya sendiri buat dorongan.
+        -- FIX "MELAYANG": kalau korban lagi duduk (dan kita gak skip,
+        -- berarti Mode Manual), lepasin dulu dari Seat SEBELUM diserang.
+        -- Kalau langsung dipaksa PlatformStand/fisika tanpa dilepas dulu,
+        -- rig masih "kejepit" antara pose duduk + weld seat + fisika
+        -- paksa -- itu yang bikin keliatan ngambang/melayang. Urutannya:
+        -- hentikan animasi duduk -> ChangeState GettingUp -> lepas
+        -- Occupant -> hancurkan weld seat -> baru badan diserang normal.
+        if isInSeat and humanoid.SeatPart then
+            local seatPartRef = humanoid.SeatPart
+
+            pcall(function()
+                local animator = humanoid:FindFirstChildOfClass("Animator")
+                if animator then
+                    for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                        local tname = (track.Name or ""):lower()
+                        local animName = (track.Animation and track.Animation.Name or ""):lower()
+                        if tname:find("sit") or animName:find("sit") then
+                            track:Stop(0)
+                        end
+                    end
+                end
+            end)
+            pcall(function()
+                humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+            end)
+            pcall(function()
+                seatPartRef.Occupant = nil
+            end)
+            pcall(function()
+                for _, obj in ipairs(seatPartRef:GetDescendants()) do
+                    if obj:IsA("Weld") or obj:IsA("WeldConstraint") or obj:IsA("Motor6D") then
+                        local p0, p1 = obj.Part0, obj.Part1
+                        local connectsToChar =
+                            (p0 and p0:IsDescendantOf(character)) or
+                            (p1 and p1:IsDescendantOf(character))
+                        if connectsToChar then
+                            obj:Destroy()
+                        end
+                    end
+                end
+            end)
+        end
+
         local vel = targetPart.AssemblyLinearVelocity
         local horizVel = Vector3.new(vel.X, 0, vel.Z)
         local horizSpeed = horizVel.Magnitude
         local isJumping = vel.Y > 2
         local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
 
-        local predictedPos = targetPart.Position
+        -- Posisi DASAR pisang sekarang lebih rendah lagi -- di bawah
+        -- pinggul/selangkangan, baru didorong ke ATAS dari situ
+        local predictedPos = targetPart.Position + Vector3.new(0, -2, 0)
 
         if isSitting then
             predictedPos = predictedPos + Vector3.new(0, -1.5, 0)
         elseif horizSpeed > 0.5 then
-            -- Horizontal (jalan/lari): offset TETAP 0.2 studs di depan
-            -- arah gerak -- konsisten buat SEMUA jenis avatar & rig
             predictedPos = predictedPos + horizVel.Unit * 0.2
         end
-        -- Loncat: SENGAJA gak ditebak, langsung ikutin posisi real-time
-        -- tiap frame -- gak mungkin ke-dodge walau spam loncat cepat.
 
         local EXTREME = Vector3.new(500000, 500000, 500000)
         local upBlast = Vector3.new(0, Config.BlastPower, 0)
 
         local movers = GetOrCreateMovers(targetRoot)
 
-        if humanoid and not isInSeat then
+        -- Sekarang gak dikondisikan "not isInSeat" lagi -- karena kalau
+        -- kode nyampe sampe sini, berarti udah lolos dari filter di atas
+        -- (bukan Serang Semua+seated), jadi aman buat diserang normal
+        -- walau lagi duduk di Mode Manual.
+        if humanoid then
             pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
             humanoid.PlatformStand = true
             humanoid.Sit = false
@@ -608,7 +661,7 @@ local function MainScript()
             pcall(function() humanoid:Move(Vector3.new(0, 0, 0), false) end)
         end
 
-        if not isInSeat then
+        do
             local rigVelocity = targetRoot.AssemblyLinearVelocity
             local rigAngular  = targetRoot.AssemblyAngularVelocity
 
@@ -625,8 +678,6 @@ local function MainScript()
                 end
             end
 
-            -- Serangan berkali-kali saat loncat: tiap 1 detik sekali
-            -- kasih EXTRA burst kuat mendadak
             if isJumping and jumpBurstState and (tick() - jumpBurstState.time >= 1) then
                 jumpBurstState.time = tick()
                 pcall(function()
@@ -677,10 +728,6 @@ local function MainScript()
             if not active then return end
 
             if Config.AutoAll then
-                -- ============================================
-                -- MODE SERANG SEMUA: gantian tiap AttackDuration
-                -- detik, fokus ke yang paling deket dulu
-                -- ============================================
                 local targets = GetValidTargets()
                 if #targets == 0 then return end
 
@@ -705,9 +752,6 @@ local function MainScript()
                     humanoid  = cur.humanoid,
                 }, jumpBurstState)
             else
-                -- ============================================
-                -- MODE SINGLE TARGET (seperti biasa)
-                -- ============================================
                 if not targetPlayer or not targetPlayer.Character or targetPlayer == LocalPlayer then return end
 
                 UpdateVictimVisuals(targetPlayer)
@@ -771,7 +815,6 @@ local function MainScript()
         pcall(function() tool:Activate() end)
     end
 
-    -- !RE = kirim "!re" ke chat all (buat respawn/reset cooldown)
     local function SendReChat()
         pcall(function()
             local char = LocalPlayer.Character
@@ -785,9 +828,6 @@ local function MainScript()
 
     -- ================================================
     -- 🛡️ PERLINDUNGAN: Anti-Fling, Anti-Ragdoll, Anti-Sit
-    -- Mesin proteksi LENGKAP (sebelumnya cuma nge-set flag doang tanpa
-    -- ada yang beneran nge-enforce -- makanya Anti-Sit & Anti-Ragdoll
-    -- gak jalan sama sekali)
     -- ================================================
 
     local Protection = {
@@ -826,9 +866,6 @@ local function MainScript()
             end)
         end)
 
-        -- Anti-Ragdoll lapis 2: banyak sistem ragdoll gak cuma ganti State,
-        -- tapi juga maksa PlatformStand=true. Kita pantau terus & langsung
-        -- balikin false kalau itu kejadian tanpa kita minta sendiri.
         pcall(function()
             humanoid:GetPropertyChangedSignal("PlatformStand"):Connect(function()
                 if Protection.AntiRagdoll and humanoid.PlatformStand then
@@ -879,11 +916,6 @@ local function MainScript()
         end)
     end)
 
-    -- Lapis tambahan Anti-Fling: clamp velocity abnormal + revert teleport
-    -- (loop ini juga sekalian nge-handle EnforceSpectate, digabung jadi 1
-    -- Heartbeat connection biar lebih ringan/smooth)
-    -- Ambang batas DITURUNIN biar responsnya jauh lebih cepat/sensitif
-    -- nangkep fling, gak nunggu sampe kelewat jauh dulu baru react.
     pcall(function()
         local lastSafePos = nil
         local lastCheckTime = tick()
@@ -903,9 +935,6 @@ local function MainScript()
             local dt = math.max(now - lastCheckTime, 1/240)
             lastCheckTime = now
 
-            -- Sweep berkala ke SEMUA part karakter (bukan cuma root),
-            -- jaga-jaga ada Constraint asing yang nempel di tangan/kaki/dll
-            -- yang gak ke-detect lewat event ChildAdded
             pcall(function()
                 for _, part in ipairs(char:GetDescendants()) do
                     if part:IsA("BasePart") then
@@ -948,8 +977,7 @@ local function MainScript()
     end)
 
     -- ================================================
-    -- 🕊️ FLY (gaya Infinite Yield: BodyVelocity + BodyGyro,
-    -- update pakai RenderStepped biar mulus, speed 100)
+    -- 🕊️ FLY
     -- ================================================
 
     local UIS_Fly = game:GetService("UserInputService")
@@ -981,9 +1009,6 @@ local function MainScript()
         flyBV.Velocity = Vector3.new(0, 0, 0)
         flyBV.Parent = root
 
-        -- BodyGyro: badan otomatis ngarah ke arah kamera, ini yang bikin
-        -- fly-nya kerasa "smooth" kayak IY (bukan cuma geser doang, tapi
-        -- orientasinya juga ikut ngikutin arah liat kita)
         flyGyro = Instance.new("BodyGyro")
         flyGyro.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
         flyGyro.P = 3000
@@ -1149,11 +1174,9 @@ local function MainScript()
         return b, setter
     end
 
-    -- Layout baru: RESET & BYPASS REFRESH dihapus -> tinggal !RE | BANANA
-    -- di baris ke-2, langsung disusul grid toggle (lebih rapi & ringkas)
-    local Y1 = PY_START                    -- search box
-    local Y2 = Y1 + BH + GAP               -- !RE | BANANA
-    local Y3 = Y2 + BH2 + GAP              -- grid start
+    local Y1 = PY_START
+    local Y2 = Y1 + BH + GAP
+    local Y3 = Y2 + BH2 + GAP
 
     local inputBox = Instance.new("TextBox", panel)
     inputBox.Size=UDim2.new(0,FULL,0,BH); inputBox.Position=UDim2.new(0,PX,0,Y1)
@@ -1165,11 +1188,9 @@ local function MainScript()
     Instance.new("UICorner",inputBox).CornerRadius=UDim.new(0,5)
     local ibs=Instance.new("UIStroke",inputBox); ibs.Color=CLR_BORDER; ibs.Thickness=1
 
-    -- ROW 2: !RE | BANANA (2 tombol rapi, HALF width masing2)
     local ireBtn     = Btn("!RE",    PX,          Y2, HALF, BH2, CLR_OFF)
     local bananaBtn  = Btn("BANANA: OFF", PX+HALF+4, Y2, HALF, BH2, CLR_OFF)
 
-    -- Grid 2 kolom
     local nameEspBillboards = {}
     local nameEspEnabled    = false
 
@@ -1445,7 +1466,6 @@ local function MainScript()
 
         closeBtn.MouseButton1Click:Connect(function()
             DestroyFishingMenu()
-            -- Sinkronkan toggle "COIN HACK" di menu utama balik ke OFF
             if coinHackSetterRef then coinHackSetterRef(false) end
         end)
 
@@ -1531,14 +1551,6 @@ local function MainScript()
         end},
         {"SERANG SEMUA: OFF", "SERANG SEMUA: ON", function(v)
             Config.AutoAll = v
-            pcall(function()
-                Library:Notify({
-                    Title = v and "🔥 Serang Semua ON" or "🎯 Mode Single",
-                    Content = v and "Gantian nyerang semua orang (skip yang jauh)" or "Pilih target manual",
-                    Duration = 2,
-                })
-            end)
-            -- Kalau lagi aktif nyerang, restart biar mode barunya langsung kepakai
             if bananaState then
                 StartChase()
             end
@@ -1563,8 +1575,6 @@ local function MainScript()
     local finalH=Y3+rows*(BH2+GAP)+GAP
     panel.Size=UDim2.new(0,PW,0,finalH)
 
-    -- ── Logika Textbox search: 2 huruf + langsung ketemu, TANPA debounce
-    -- yang bisa nge-block, + Enter juga langsung finalize ──
     local selectionMode    = nil
     local lastNotifiedTarget = nil
 
@@ -1598,13 +1608,11 @@ local function MainScript()
         end
     end)
 
-    -- !RE = kirim "!re" ke chat all
     ireBtn.MouseButton1Click:Connect(SendReChat)
 
-    -- BANANA toggle
-        bananaBtn.MouseButton1Click:Connect(function()
+    bananaBtn.MouseButton1Click:Connect(function()
         if not bananaState and not Config.AutoAll and not targetPlayer then
-            return -- gak ada target & bukan mode serang semua, jangan nyalain apa2
+            return
         end
         bananaState=not bananaState
         bananaBtn.BackgroundColor3=bananaState and CLR_ON or CLR_OFF
@@ -1617,7 +1625,6 @@ local function MainScript()
         end
     end)
 
-    -- PlayerAdded: pasang name ESP + hook respawn kalau ON
     Players.PlayerAdded:Connect(function(plr)
         task.wait(0.5)
         plr.CharacterAdded:Connect(function()
@@ -1626,8 +1633,6 @@ local function MainScript()
         end)
     end)
 
-    -- Hook respawn buat player yang SUDAH ada di server (fix Name ESP
-    -- hilang kalau mereka respawn, bukan cuma yang baru join)
     for _, plr in ipairs(Players:GetPlayers()) do
         if plr ~= LocalPlayer then
             plr.CharacterAdded:Connect(function()
