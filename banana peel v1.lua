@@ -214,8 +214,10 @@ end
 local function MainScript()
 
     local Config = {
-        BlastPower = 2000000, -- dikuatin jadi 2 juta
-        TargetPart = "HumanoidRootPart",
+        BlastPower     = 2000000, -- dikuatin jadi 2 juta
+        TargetPart     = "HumanoidRootPart",
+        AutoAll        = false, -- Serang Semua (bergantian)
+        AttackDuration = 1.5,   -- detik per target sebelum pindah ke berikutnya
     }
     local targetPlayer  = nil
     local active        = false
@@ -223,6 +225,8 @@ local function MainScript()
     local conn          = nil
     local myBananas     = {}
     local lastThrowTime = 0
+    local currentTargetIndex = 1
+    local bananaState   = false
 
     -- ================================================
     -- UTILITY
@@ -239,6 +243,42 @@ local function MainScript()
             end
         end
         return nil
+    end
+
+    -- ================================================
+    -- 🔥 SERANG SEMUA: kumpulkan target valid, skip yang
+    -- lagi duduk, urutkan dari yang paling dekat
+    -- ================================================
+    local function GetValidTargets()
+        local myRoot = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not myRoot then return {} end
+
+        local targets = {}
+        for _, plr in ipairs(Players:GetPlayers()) do
+            if plr ~= LocalPlayer and plr.Character then
+                local root = plr.Character:FindFirstChild("HumanoidRootPart")
+                local hum  = plr.Character:FindFirstChildOfClass("Humanoid")
+                -- Skip yang lagi duduk/seated -- jangan diserang sama sekali
+                local isSeated = hum and (hum.Sit or hum.SeatPart ~= nil)
+                if root and hum and hum.Health > 0 and not isSeated then
+                    local part = plr.Character:FindFirstChild(Config.TargetPart)
+                    if not part or not part:IsA("BasePart") then part = root end
+
+                    local dist = (root.Position - myRoot.Position).Magnitude
+                    table.insert(targets, {
+                        player    = plr,
+                        character = plr.Character,
+                        root      = root,
+                        part      = part,
+                        humanoid  = hum,
+                        distance  = dist,
+                    })
+                end
+            end
+        end
+
+        table.sort(targets, function(a, b) return a.distance < b.distance end)
+        return targets
     end
 
     local function ClaimIfMine(obj)
@@ -503,150 +543,191 @@ local function MainScript()
         end
     end
 
-    StartChase = function()
-        if conn then conn:Disconnect() end
-        if not targetPlayer or targetPlayer == LocalPlayer then return end
+    -- ================================================
+    -- 🔥 Serang 1 target (dipakai mode Single & mode Serang
+    -- Semua). jumpBurstState = table {time=...} biar bisa
+    -- diubah dari dalam function (Lua gak ada pass-by-ref
+    -- buat number biasa)
+    -- ================================================
+    local function AttackOneTarget(targetData, jumpBurstState)
+        local character = targetData.character
+        local targetRoot = targetData.root
+        local targetPart = targetData.part
+        local humanoid   = targetData.humanoid
+        if not character or not targetRoot or not targetPart then return end
 
-        active = true
-        ClearAllMovers()
-        SetupVictimVisuals(targetPlayer)
+        -- Pastikan HumanoidRootPart gak ke-anchor & network owner tetap
+        -- di kita tiap frame -- beberapa avatar kadang "diam gak mental"
+        -- karena ownership fisikanya kerebut balik atau part-nya sempat
+        -- ke-anchor oleh sistem lain
+        pcall(function()
+            if targetRoot.Anchored then targetRoot.Anchored = false end
+            targetRoot:SetNetworkOwner(LocalPlayer)
+        end)
 
-        conn = RunService.Heartbeat:Connect(function(dt)
-            if not active then return end
-            if not targetPlayer or not targetPlayer.Character or targetPlayer == LocalPlayer then return end
+        local isInSeat = humanoid and humanoid.SeatPart ~= nil
 
-            UpdateVictimVisuals(targetPlayer)
+        -- Korban lagi duduk/seated: JANGAN diserang sama sekali -- gak
+        -- dipush, gak dipoke Jump, gak diapa-apain. Biarin aja sampai dia
+        -- berdiri sendiri, baru diserang lagi otomatis frame berikutnya.
+        if isInSeat then
+            return
+        end
 
-            local character = targetPlayer.Character
-            local targetRoot = character:FindFirstChild("HumanoidRootPart")
-            local humanoid   = character:FindFirstChildOfClass("Humanoid")
-            if not targetRoot then return end
+        -- 📸 Baca kecepatan ASLI korban DULU, SEBELUM kita nimpa
+        -- velocity-nya sendiri buat dorongan.
+        local vel = targetPart.AssemblyLinearVelocity
+        local horizVel = Vector3.new(vel.X, 0, vel.Z)
+        local horizSpeed = horizVel.Magnitude
+        local isJumping = vel.Y > 2
+        local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
 
-            local targetPart = character:FindFirstChild(Config.TargetPart)
-            if not targetPart or not targetPart:IsA("BasePart") then
-                targetPart = targetRoot
-            end
+        local predictedPos = targetPart.Position
 
-            -- Pastikan HumanoidRootPart gak ke-anchor & network owner tetap
-            -- di kita tiap frame -- beberapa avatar kadang "diam gak mental"
-            -- karena ownership fisikanya kerebut balik atau part-nya sempat
-            -- ke-anchor oleh sistem lain
-            pcall(function()
-                if targetRoot.Anchored then targetRoot.Anchored = false end
-                targetRoot:SetNetworkOwner(LocalPlayer)
-            end)
+        if isSitting then
+            predictedPos = predictedPos + Vector3.new(0, -1.5, 0)
+        elseif horizSpeed > 0.5 then
+            -- Horizontal (jalan/lari): offset TETAP 0.2 studs di depan
+            -- arah gerak -- konsisten buat SEMUA jenis avatar & rig
+            predictedPos = predictedPos + horizVel.Unit * 0.2
+        end
+        -- Loncat: SENGAJA gak ditebak, langsung ikutin posisi real-time
+        -- tiap frame -- gak mungkin ke-dodge walau spam loncat cepat.
 
-            local isInSeat = humanoid and humanoid.SeatPart ~= nil
+        local EXTREME = Vector3.new(500000, 500000, 500000)
+        local upBlast = Vector3.new(0, Config.BlastPower, 0)
 
-            -- Selama korban lagi duduk, push memang di-skip (biar gak
-            -- melayang) -- tapi biar gak nunggu lama sampai dia gerak
-            -- sendiri buat keluar dari kursi, kita pancing keluar pakai
-            -- humanoid.Jump = true. Ini cara RESMI bawaan Roblox buat
-            -- keluar dari seat (sama kayak pencet Space pas duduk), jadi
-            -- mulus & gak glitch/ngambang seperti cara paksa (destroy weld
-            -- dll) yang sempat dicoba sebelumnya.
-            if isInSeat and humanoid then
-                pcall(function() humanoid.Jump = true end)
-            end
+        local movers = GetOrCreateMovers(targetRoot)
 
-            -- 📸 Baca kecepatan ASLI korban DULU, SEBELUM kita nimpa
-            -- velocity-nya sendiri buat dorongan. Kalau dibaca SETELAH
-            -- dorongan diterapkan, yang kebaca itu velocity dorongan KITA
-            -- sendiri (bukan gerakan asli korban) -- itu yang bikin sistem
-            -- selalu ngira korban "lagi loncat" terus, gak bisa bedain
-            -- diam/jalan/loncat yang sebenarnya.
-            local vel = targetPart.AssemblyLinearVelocity
-            local horizVel = Vector3.new(vel.X, 0, vel.Z)
-            local horizSpeed = horizVel.Magnitude
-            local isJumping = vel.Y > 2
-            local isSitting = humanoid and (humanoid.Sit or humanoid.SeatPart ~= nil)
+        if humanoid and not isInSeat then
+            pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
+            humanoid.PlatformStand = true
+            humanoid.Sit = false
+            humanoid.WalkSpeed = 0
+            humanoid.JumpPower = 0
+            pcall(function() humanoid:Move(Vector3.new(0, 0, 0), false) end)
+        end
 
-            local predictedPos = targetPart.Position
+        if not isInSeat then
+            local rigVelocity = targetRoot.AssemblyLinearVelocity
+            local rigAngular  = targetRoot.AssemblyAngularVelocity
 
-            if isSitting then
-                -- Pas duduk, HumanoidRootPart posisinya suka "ketarik" ke
-                -- atas relatif ke visual badan yang lagi nekuk -- turunin
-                -- dikit biar pisang tetap di perut, bukan nongol di kepala
-                predictedPos = predictedPos + Vector3.new(0, -1.5, 0)
-            elseif horizSpeed > 0.5 then
-                -- Horizontal (jalan/lari): offset TETAP 0.2 studs di depan
-                -- arah gerak -- BUKAN dikali kecepatan/waktu, jadi jaraknya
-                -- konsisten buat SEMUA jenis avatar & rig (R6, R15, custom)
-                -- walau WalkSpeed-nya beda-beda.
-                predictedPos = predictedPos + horizVel.Unit * 0.2
-            end
+            targetRoot.AssemblyLinearVelocity  = Vector3.new(0, rigVelocity.Y + upBlast.Y, 0)
+            targetRoot.AssemblyAngularVelocity = EXTREME
 
-            -- Loncat (termasuk spam loncat cepat): SENGAJA gak ditebak lagi.
-            -- targetPart.Position di atas itu udah posisi ASLI real-time
-            -- korban SAAT INI (bukan delay), dan loop ini jalan 60x/detik --
-            -- jadi gak perlu nebak "0.15 detik ke depan" segala. Nebak
-            -- malah bikin meleset pas korban spam loncat cepat (kadang
-            -- ketinggian/kerendahan dari badan aslinya), itu makanya dia
-            -- kadang bisa lolos. Sekarang tinggal ikutin badan asli tiap
-            -- frame -- gak mungkin ke-dodge lagi semenceng apapun dia loncat.
+            movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
+            movers.bav.AngularVelocity = EXTREME
 
-            local EXTREME = Vector3.new(500000, 500000, 500000)
-            local upBlast = Vector3.new(0, Config.BlastPower, 0)
-
-            local movers = GetOrCreateMovers(targetRoot)
-
-            -- Kalau lagi duduk di Seat/VehicleSeat BENERAN (gerobak, ayunan,
-            -- dll), JANGAN paksa PlatformStand/lock -- itu bentrok sama weld
-            -- bawaan seat-nya dan bikin badan keliatan "melayang"/glitch.
-            -- Cukup dilewatin, gak diapa-apain fisiknya.
-            if humanoid and not isInSeat then
-                pcall(function() humanoid:ChangeState(Enum.HumanoidStateType.Physics) end)
-                humanoid.PlatformStand = true
-                humanoid.Sit = false
-                humanoid.WalkSpeed = 0
-                humanoid.JumpPower = 0
-                pcall(function() humanoid:Move(Vector3.new(0, 0, 0), false) end)
-            end
-
-            -- 💪 DORONGAN SELALU DITERAPKAN tiap frame selama masih nge-chase,
-            -- TIDAK digantung sama ada/gaknya banana yang lagi ke-track lagi.
-            -- Sebelumnya kode dorongan ada DI DALAM loop "for banana in
-            -- FindBananas()" -- jadi kalau tracking banana-nya sempat kosong
-            -- (misal abis hilang/belum ke-klaim ulang), padahal pisangnya
-            -- masih keliatan nempel (posisi terakhir), dorongannya BERHENTI
-            -- total meski pisang masih nongol. Sekarang dorongan dipisah,
-            -- selalu jalan extreme kuat gak peduli status tracking banana.
-            -- (Kecuali kalau lagi di Seat beneran -- lihat komentar di atas)
-            if not isInSeat then
-                local rigVelocity = targetRoot.AssemblyLinearVelocity
-                local rigAngular  = targetRoot.AssemblyAngularVelocity
-
-                targetRoot.AssemblyLinearVelocity  = Vector3.new(0, rigVelocity.Y + upBlast.Y, 0)
-                targetRoot.AssemblyAngularVelocity = EXTREME
-
-                movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
-                movers.bav.AngularVelocity = EXTREME
-
-                for _, part in ipairs(character:GetChildren()) do
-                    if part:IsA("BasePart") and part ~= targetRoot then
-                        part.AssemblyLinearVelocity  = Vector3.new(0, upBlast.Y, 0)
-                        part.AssemblyAngularVelocity = EXTREME
-                    end
+            for _, part in ipairs(character:GetChildren()) do
+                if part:IsA("BasePart") and part ~= targetRoot then
+                    part.AssemblyLinearVelocity  = Vector3.new(0, upBlast.Y, 0)
+                    part.AssemblyAngularVelocity = EXTREME
                 end
             end
 
-            -- (predictedPos sudah dihitung DI ATAS, SEBELUM dorongan
-            -- diterapkan -- jangan hitung ulang di sini, karena kalau
-            -- dihitung ulang sekarang, targetPart.AssemblyLinearVelocity
-            -- yang kebaca itu velocity DORONGAN KITA sendiri yang udah
-            -- jutaan, bukan gerakan asli korban -- itu yang bikin pisang
-            -- terbang entah ke mana tadi)
-
-            for _, banana in ipairs(FindBananas()) do
-                if not banana or not banana.Parent then continue end
-
+            -- Serangan berkali-kali saat loncat: tiap 1 detik sekali
+            -- kasih EXTRA burst kuat mendadak
+            if isJumping and jumpBurstState and (tick() - jumpBurstState.time >= 1) then
+                jumpBurstState.time = tick()
                 pcall(function()
-                    banana.CFrame = CFrame.new(predictedPos)
+                    targetRoot.AssemblyLinearVelocity = Vector3.new(0, upBlast.Y, 0)
+                    movers.bv.Velocity = Vector3.new(0, upBlast.Y, 0)
+                    for _, part in ipairs(character:GetChildren()) do
+                        if part:IsA("BasePart") and part ~= targetRoot then
+                            part.AssemblyLinearVelocity = Vector3.new(0, upBlast.Y, 0)
+                        end
+                    end
                 end)
-                banana.Anchored = false
-                banana.CanCollide = false
-                banana.AssemblyLinearVelocity  = EXTREME
-                banana.AssemblyAngularVelocity = EXTREME
+            end
+        end
+
+        for _, banana in ipairs(FindBananas()) do
+            if not banana or not banana.Parent then continue end
+            pcall(function()
+                banana.CFrame = CFrame.new(predictedPos)
+            end)
+            banana.Anchored = false
+            banana.CanCollide = false
+            banana.AssemblyLinearVelocity  = EXTREME
+            banana.AssemblyAngularVelocity = EXTREME
+        end
+    end
+
+    StartChase = function()
+        if conn then conn:Disconnect() end
+        if not Config.AutoAll and (not targetPlayer or targetPlayer == LocalPlayer) then return end
+
+        active = true
+        ClearAllMovers()
+
+        local switchTimer = 0
+        currentTargetIndex = 1
+        local jumpBurstState = { time = 0 }
+
+        if Config.AutoAll then
+            local targets = GetValidTargets()
+            if #targets > 0 then
+                SetupVictimVisuals(targets[1].player)
+            end
+        else
+            SetupVictimVisuals(targetPlayer)
+        end
+
+        conn = RunService.Heartbeat:Connect(function(dt)
+            if not active then return end
+
+            if Config.AutoAll then
+                -- ============================================
+                -- MODE SERANG SEMUA: gantian tiap AttackDuration
+                -- detik, fokus ke yang paling deket dulu
+                -- ============================================
+                local targets = GetValidTargets()
+                if #targets == 0 then return end
+
+                switchTimer = switchTimer + dt
+                if switchTimer >= Config.AttackDuration or currentTargetIndex > #targets then
+                    switchTimer = 0
+                    currentTargetIndex = currentTargetIndex + 1
+                    if currentTargetIndex > #targets then
+                        currentTargetIndex = 1
+                    end
+                    SetupVictimVisuals(targets[currentTargetIndex].player)
+                end
+
+                local cur = targets[currentTargetIndex]
+                if not cur then return end
+
+                UpdateVictimVisuals(cur.player)
+                AttackOneTarget({
+                    character = cur.character,
+                    root      = cur.root,
+                    part      = cur.part,
+                    humanoid  = cur.humanoid,
+                }, jumpBurstState)
+            else
+                -- ============================================
+                -- MODE SINGLE TARGET (seperti biasa)
+                -- ============================================
+                if not targetPlayer or not targetPlayer.Character or targetPlayer == LocalPlayer then return end
+
+                UpdateVictimVisuals(targetPlayer)
+
+                local character = targetPlayer.Character
+                local targetRoot = character:FindFirstChild("HumanoidRootPart")
+                local humanoid   = character:FindFirstChildOfClass("Humanoid")
+                if not targetRoot then return end
+
+                local targetPart = character:FindFirstChild(Config.TargetPart)
+                if not targetPart or not targetPart:IsA("BasePart") then
+                    targetPart = targetRoot
+                end
+
+                AttackOneTarget({
+                    character = character,
+                    root      = targetRoot,
+                    part      = targetPart,
+                    humanoid  = humanoid,
+                }, jumpBurstState)
             end
         end)
     end
@@ -1448,6 +1529,20 @@ local function MainScript()
         {"FLY: OFF", "FLY: ON", function(v)
             if v then StartFly() else StopFly() end
         end},
+        {"SERANG SEMUA: OFF", "SERANG SEMUA: ON", function(v)
+            Config.AutoAll = v
+            pcall(function()
+                Library:Notify({
+                    Title = v and "🔥 Serang Semua ON" or "🎯 Mode Single",
+                    Content = v and "Gantian nyerang semua orang (skip yang jauh)" or "Pilih target manual",
+                    Duration = 2,
+                })
+            end)
+            -- Kalau lagi aktif nyerang, restart biar mode barunya langsung kepakai
+            if bananaState then
+                StartChase()
+            end
+        end},
         {"COIN HACK: OFF", "COIN HACK: ON", function(v, setter)
             coinHackSetterRef = setter
             if v then
@@ -1507,10 +1602,9 @@ local function MainScript()
     ireBtn.MouseButton1Click:Connect(SendReChat)
 
     -- BANANA toggle
-    local bananaState=false
-    bananaBtn.MouseButton1Click:Connect(function()
-        if not bananaState and not targetPlayer then
-            return -- gak ada target, jangan nyalain apa2
+        bananaBtn.MouseButton1Click:Connect(function()
+        if not bananaState and not Config.AutoAll and not targetPlayer then
+            return -- gak ada target & bukan mode serang semua, jangan nyalain apa2
         end
         bananaState=not bananaState
         bananaBtn.BackgroundColor3=bananaState and CLR_ON or CLR_OFF
