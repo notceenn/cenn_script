@@ -485,7 +485,7 @@ end
 -- ============================================================
 -- BLOKIR REMOTE (Anti-Lag Piano) — OPTIMIZED: event-driven, zero per-frame loop
 -- ============================================================
-local remoteBlockEnabled = false
+local remoteBlockEnabled = true   -- langsung aktif saat execute
 local targetBlockRemote  = nil
 local activeWrappers     = {}
 
@@ -532,6 +532,19 @@ workspace.DescendantRemoving:Connect(function(obj)
         table.clear(activeWrappers)
     end
 end)
+
+-- ============================================================
+-- AUTO-INIT: Langsung aktifkan blocker saat script dijalankan
+-- Berlaku di PC maupun Mobile
+-- ============================================================
+do
+    local ev = workspace:FindFirstChild(PIANO_EVENT_NAME)
+    if ev and ev:IsA("RemoteEvent") then
+        targetBlockRemote = ev
+        task.defer(setupBlocker)  -- defer agar game sempat attach listener-nya duluan
+    end
+    -- Kalau remote belum ada, DescendantAdded di atas yang akan handle otomatis
+end
 
 -- ============================================================
 -- UI SECTIONS & CONTROLS
@@ -588,7 +601,7 @@ end)
 
 MakeSection("Anti Lag")
 
-MakeToggle("Blokir Remote Play (Anti-Lag)", false, function(state)
+MakeToggle("Blokir Remote Play (Anti-Lag)", true, function(state)
     remoteBlockEnabled = state
     if state then
         -- Seed remote sekarang kalau sudah ada di workspace
