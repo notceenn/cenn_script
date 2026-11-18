@@ -1,6 +1,8 @@
 -- ============================================================
 -- PIANO SPAM + BLOKIR REMOTE (Anti-Lag)
--- Standalone Script — Diekstrak dari GATAA HUTAN VIP
+-- Standalone Script — Optimized for Mobile
+-- Fix: Blocker pakai event-driven (DescendantAdded/Removing)
+--      bukan RunService.Stepped loop per-frame
 -- ============================================================
 
 local Players          = game:GetService("Players")
@@ -481,47 +483,53 @@ local function PIANO_startSpam()
 end
 
 -- ============================================================
--- BLOKIR REMOTE (Anti-Lag Piano)
+-- BLOKIR REMOTE (Anti-Lag Piano) — OPTIMIZED: event-driven, zero per-frame loop
 -- ============================================================
 local remoteBlockEnabled = false
 local targetBlockRemote  = nil
 local activeWrappers     = {}
 
+-- Pasang wrapper sekali saja, tidak perlu loop
 local function setupBlocker()
-    targetBlockRemote = workspace:FindFirstChild(PIANO_EVENT_NAME)
     if not targetBlockRemote then return end
+    -- Cegah pasang ulang kalau sudah ada wrapper aktif
+    if next(activeWrappers) then return end
     pcall(function()
         for _, conn in pairs(getconnections(targetBlockRemote.OnClientEvent)) do
-            if not activeWrappers[conn] then
-                local oldFunc = conn.Function
-                if oldFunc then
-                    conn:Disconnect()
-                    local newConn = targetBlockRemote.OnClientEvent:Connect(function(action, ...)
-                        if remoteBlockEnabled and action == "play" then return end
-                        return oldFunc(action, ...)
-                    end)
-                    activeWrappers[newConn] = true
-                end
+            local oldFunc = conn.Function
+            if oldFunc then
+                conn:Disconnect()
+                local newConn = targetBlockRemote.OnClientEvent:Connect(function(action, ...)
+                    if remoteBlockEnabled and action == "play" then return end
+                    return oldFunc(action, ...)
+                end)
+                activeWrappers[newConn] = true
             end
         end
     end)
 end
 
--- Background watcher untuk Blokir Remote
-task.spawn(function()
-    while true do
-        RunService.Stepped:Wait()
-        if remoteBlockEnabled then
-            if not targetBlockRemote or not targetBlockRemote.Parent then
-                targetBlockRemote = workspace:FindFirstChild(PIANO_EVENT_NAME)
-                table.clear(activeWrappers)
-            end
-            if targetBlockRemote then setupBlocker() end
-        else
-            if next(activeWrappers) then
-                table.clear(activeWrappers)
-            end
-        end
+local function teardownBlocker()
+    table.clear(activeWrappers)
+    -- Reconnect listener asli tidak diperlukan karena game akan re-attach sendiri
+end
+
+-- DescendantAdded: tangkap saat remote muncul (tanpa loop)
+workspace.DescendantAdded:Connect(function(obj)
+    if not remoteBlockEnabled then return end
+    if obj.Name == PIANO_EVENT_NAME and obj:IsA("RemoteEvent") then
+        targetBlockRemote = obj
+        table.clear(activeWrappers)
+        -- Tunggu 1 frame agar game sempat attach listener-nya duluan
+        task.defer(setupBlocker)
+    end
+end)
+
+-- DescendantRemoving: bersihkan kalau remote hilang
+workspace.DescendantRemoving:Connect(function(obj)
+    if obj == targetBlockRemote then
+        targetBlockRemote = nil
+        table.clear(activeWrappers)
     end
 end)
 
@@ -583,18 +591,21 @@ MakeSection("Anti Lag")
 MakeToggle("Blokir Remote Play (Anti-Lag)", false, function(state)
     remoteBlockEnabled = state
     if state then
-        setupBlocker()
-        if targetBlockRemote then
-            Notify("Anti-Lag", "Remote 'play' diblokir dari client")
+        -- Seed remote sekarang kalau sudah ada di workspace
+        local ev = workspace:FindFirstChild(PIANO_EVENT_NAME)
+        if ev and ev:IsA("RemoteEvent") then
+            targetBlockRemote = ev
+            task.defer(setupBlocker)
+            Notify("Anti-Lag", "Remote 'play' diblokir")
         else
-            Notify("Anti-Lag", "Remote tidak ditemukan di workspace")
+            Notify("Anti-Lag", "Remote belum ada, akan auto-block saat muncul")
         end
     else
-        table.clear(activeWrappers)
+        teardownBlocker()
         Notify("Anti-Lag", "Blokir remote dimatikan")
     end
 end)
 
 -- ============================================================
 -- END OF SCRIPT
--- ============================================================print("Welcome to Real")
+-- ============================================================
