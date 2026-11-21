@@ -1,9 +1,46 @@
-    local Players          = game:GetService("Players")
+local Players          = game:GetService("Players")
 local RunService       = game:GetService("RunService")
 local UserInputService = game:GetService("UserInputService")
 local TweenService     = game:GetService("TweenService")
 local RS               = game:GetService("ReplicatedStorage")
 local LocalPlayer      = Players.LocalPlayer
+-- ============================================================
+-- Anti Gameplay Paused (Auto Aktif saat Execute)
+-- ============================================================
+task.spawn(function()
+    while true do
+        pcall(function()
+            if game:GetService("GuiService").SelectedObject then
+                game:GetService("GuiService").SelectedObject = nil
+            end
+        end)
+        pcall(function()
+            local vr = game:GetService("VRService")
+            if vr and vr.VREnabled then return end
+        end)
+        pcall(function()
+            if game:GetService("UserInputService").GamepadEnabled then
+                game:GetService("UserInputService"):GetFocusedTextBox()
+            end
+        end)
+        -- Anti pause utama
+        pcall(function()
+            local coregui = game:GetService("CoreGui")
+            local topbar = coregui:FindFirstChild("TopBarApp")
+            if topbar then
+                for _, v in ipairs(topbar:GetDescendants()) do
+                    if v:IsA("TextButton") and v.Text:lower():find("resume") then
+                        v:Activate()
+                    end
+                end
+            end
+        end)
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("TopbarEnabled", true)
+        end)
+        task.wait(0.1)
+    end
+end)
 
 local function GetGuiParent()
     if typeof(gethui) == "function" then
@@ -690,7 +727,7 @@ end)
 -- ============================================================
 
 -- ============================================================
--- CHANGED: Auto Sit (Hanya Tool & Optimasi Bebas Lag)
+-- Auto Sit (ULTRA FAST + Continuous Scan)
 -- ============================================================
 MakeSection("Auto Sit")
 
@@ -828,7 +865,7 @@ local function wAS_findNearestWB(root, maxDist)
             for _, pat in ipairs(VEHICLE_PATTERNS_AS) do
                 if lname:match(pat) then isVehicle = true; break end
             end
-            if isVehicle and obj ~= wAS.lastWB and wAS_isSeatFree(obj, myHum) then
+            if isVehicle and wAS_isSeatFree(obj, myHum) then
                 local pusherBlocking = false
                 pcall(function()
                     local ph = wAS_findPusher(obj)
@@ -886,12 +923,37 @@ local function wAS_cleanup()
     wAS.sitTracked   = false
 end
 
+-- ============================================================
+-- [BARU] Hook DescendantAdded untuk deteksi equip/unequip WB
+-- Scan langsung reset setiap ada perubahan Tool di workspace
+-- ============================================================
 workspace.DescendantAdded:Connect(function(obj)
     if not wAS.enabled then return end
     if obj:IsA("Tool") then
         local n = obj.Name:lower()
         for _, pat in ipairs(VEHICLE_PATTERNS_AS) do
             if n:match(pat) then
+                -- Reset wbTick ke 20 agar scan jalan di Heartbeat berikutnya
+                wAS.wbTick = 20
+                -- Juga reset model yang tersimpan agar scan ulang dari awal
+                wAS.wbModel = nil
+                wAS.wbSeat  = nil
+                break
+            end
+        end
+    end
+end)
+
+workspace.DescendantRemoving:Connect(function(obj)
+    if not wAS.enabled then return end
+    if obj:IsA("Tool") then
+        local n = obj.Name:lower()
+        for _, pat in ipairs(VEHICLE_PATTERNS_AS) do
+            if n:match(pat) then
+                -- Jika WB yang kita track di-unequip/hilang, langsung reset
+                if wAS.wbModel == obj then
+                    wAS_cleanup()
+                end
                 wAS.wbTick = 20
                 break
             end
@@ -899,47 +961,67 @@ workspace.DescendantAdded:Connect(function(obj)
     end
 end)
 
+-- ============================================================
+-- [BARU] Loop Heartbeat — scan SETIAP tick (bukan tiap 20)
+-- + percobaan duduk dilakukan via task.spawn loop terpisah
+-- ============================================================
+local wAS_sitThread = nil
+
+local function wAS_startSitLoop()
+    if wAS_sitThread then
+        pcall(function() task.cancel(wAS_sitThread) end)
+        wAS_sitThread = nil
+    end
+    wAS_sitThread = task.spawn(function()
+        while wAS.enabled do
+            local char = LocalPlayer.Character
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            local seat = wAS.wbSeat
+
+            if hum and seat and seat.Parent then
+                pcall(function()
+                    if hum.SeatPart == seat then
+                        hum.Sit = true
+                        -- Auto Turun logic
+                        if wAS.autoTurun then
+                            if not wAS.sitTracked then
+                                wAS.sitStartTick = tick()
+                                wAS.sitTracked   = true
+                            elseif tick() - wAS.sitStartTick >= wAS.turunDelay then
+                                hum.Sit = false
+                                pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+                                wAS_cleanup()
+                            end
+                        end
+                    else
+                        -- Belum duduk → paksa duduk
+                        wAS.sitTracked = false
+                        seat:Sit(hum)
+                    end
+                end)
+            end
+
+            -- [ULTRA FAST] Tidak ada wait → jalan secepat scheduler Roblox bisa
+            task.wait()
+        end
+    end)
+end
+
 RunService.Heartbeat:Connect(function()
     if not wAS.enabled then return end
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
     if not char or not root or not hum then return end
-    
-    wAS.wbTick = wAS.wbTick + 1
-    if wAS.wbTick >= 20 then
-        wAS.wbTick = 0
-        if wAS.wbModel and not wAS.wbModel.Parent then wAS_cleanup() end
-        local found = wAS_findNearestWB(root, wAS.maxDist)
-        if found and found ~= wAS.wbModel then
-            wAS.wbModel = found
-            wAS.wbSeat  = wAS_getSeat(found)
-        elseif not found then
-            wAS_cleanup()
-        end
-    end
-    if wAS.wbSeat and wAS.wbSeat.Parent then
-        pcall(function()
-            if hum.SeatPart == wAS.wbSeat then
-                if not hum.Sit then hum.Sit = true end
-                if wAS.autoTurun then
-                    if not wAS.sitTracked then
-                        wAS.sitStartTick = tick()
-                        wAS.sitTracked   = true
-                    else
-                        if tick() - wAS.sitStartTick >= wAS.turunDelay then
-                            if wAS.wbModel then wAS.lastWB = wAS.wbModel end
-                            hum.Sit = false
-                            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-                            wAS_cleanup()
-                        end
-                    end
-                end
-            elseif not hum.SeatPart then
-                wAS.sitTracked = false
-                wAS.wbSeat:Sit(hum)
-            end
-        end)
+
+    -- [BARU] Scan SETIAP Heartbeat (bukan tiap 20 tick)
+    if wAS.wbModel and not wAS.wbModel.Parent then wAS_cleanup() end
+    local found = wAS_findNearestWB(root, wAS.maxDist)
+    if found and found ~= wAS.wbModel then
+        wAS.wbModel = found
+        wAS.wbSeat  = wAS_getSeat(found)
+    elseif not found then
+        wAS_cleanup()
     end
 end)
 
@@ -950,7 +1032,7 @@ LocalPlayer.CharacterAdded:Connect(function()
     wAS.sitStartTick = 0
     wAS.sitTracked   = false
     wAS.lastWB       = nil
-    
+
     if wAS.enabled then
         task.wait(0.5)
         local char = LocalPlayer.Character
@@ -965,7 +1047,6 @@ LocalPlayer.CharacterAdded:Connect(function()
     end
 end)
 
-
 MakeToggle("Auto Sit", false, function(state)
     wAS.enabled = state
     if state then
@@ -979,7 +1060,12 @@ MakeToggle("Auto Sit", false, function(state)
                 wAS.wbSeat  = wAS_getSeat(found)
             end
         end
+        wAS_startSitLoop()
     else
+        if wAS_sitThread then
+            pcall(function() task.cancel(wAS_sitThread) end)
+            wAS_sitThread = nil
+        end
         wAS_cleanup()
     end
 end)
@@ -1135,11 +1221,56 @@ exclBox.FocusLost:Connect(function(enterPressed)
 end)
 
 refreshExclList()
+
+-- ============================================================
+-- Character Fresh (Reset Fisik Terus-Menerus)
+-- ============================================================
+MakeSection("Character Fresh")
+
+local charFresh_enabled = false
+local charFresh_conn = nil
+
+local function charFresh_reset()
+    local char = LocalPlayer.Character
+    if not char then return end
+    for _, part in ipairs(char:GetDescendants()) do
+        if part:IsA("BasePart") then
+            pcall(function()
+                part.CustomPhysicalProperties = PhysicalProperties.new(
+                    0.7, 0.3, 0.5, 1, 1
+                )
+            end)
+        end
+    end
+end
+
+MakeToggle("Character Fresh", false, function(state)
+    charFresh_enabled = state
+    if state then
+        charFresh_conn = RunService.Heartbeat:Connect(function()
+            if not charFresh_enabled then return end
+            charFresh_reset()
+        end)
+    else
+        if charFresh_conn then
+            charFresh_conn:Disconnect()
+            charFresh_conn = nil
+        end
+    end
+end)
+
+LocalPlayer.CharacterAdded:Connect(function()
+    if charFresh_enabled then
+        task.wait(0.1)
+        charFresh_reset()
+    end
+end)
 -- ============================================================
 
 -- ============================================================
 -- ADDED: Wheelbarrow Owner Detector
 -- ============================================================
+
 MakeSection("Wheelbarrow Detector")
 
 local wDetect_enabled   = false
