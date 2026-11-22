@@ -1,6 +1,6 @@
 -- ============================================================
 -- AUTO FISHING SCRIPT (GATAA MITOS FISHING! - RANDOM HOLD TIME)
--- EDIT: Randomized hold time for manual cast simulation
+-- EDIT: Mobile support via HoldPower button
 -- ============================================================
 
 local RS = game:GetService("ReplicatedStorage")
@@ -23,11 +23,11 @@ local StateAttribute = Config.Fishing.StateAttribute
 
 local Settings = {
     enabled      = false,
-    clickDelay   = 0.08,   
+    clickDelay   = 0.08,
     safeMode     = true,
     debugPrint   = true,
-    stuckTimeout = 11,     
-    hideMinigame = true, 
+    stuckTimeout = 14,
+    hideMinigame = true,
 }
 
 local State = {
@@ -35,11 +35,11 @@ local State = {
     totalCast    = 0,
     logLines     = {},
     maxLog       = 8,
-    lastCastTime = 0,      
+    lastCastTime = 0,
 }
 
 -- ============================================================
--- UI BUILD (Sama persis)
+-- UI BUILD
 -- ============================================================
 if PlayerGui:FindFirstChild("AutoFishUI") then PlayerGui.AutoFishUI:Destroy() end
 local ScreenGui = Instance.new("ScreenGui")
@@ -56,8 +56,8 @@ local C = {
     orange=Color3.fromRGB(255, 165, 0)
 }
 
-local FULL_HEIGHT = 360  
-local MINI_HEIGHT = 36   
+local FULL_HEIGHT = 360
+local MINI_HEIGHT = 36
 
 local Main = Instance.new("Frame")
 Main.Size = UDim2.new(0, 280, 0, FULL_HEIGHT)
@@ -290,38 +290,77 @@ local function hideMinigameUI()
     end)
 end
 
--- 🆕 FUNGSI CAST INSTAN (RANDOM HOLD TIME)
+-- ============================================================
+-- FUNGSI CARI HOLDPOWER BUTTON
+-- ============================================================
+local function getHoldPowerBtn()
+    local HUD = PlayerGui:FindFirstChild("HUD")
+    if not HUD then return nil end
+    local FishingPower = HUD:FindFirstChild("FishingPower")
+    if not FishingPower then return nil end
+    return FishingPower:FindFirstChild("HoldPower")
+end
+
+-- ============================================================
+-- INSTANT CAST (SUPPORT MOBILE & PC)
+-- ============================================================
 local function instantCast()
     if not Settings.enabled then return end
     task.spawn(function()
         local char = lp.Character
         if not char then return end
-        local tool = char:FindFirstChildOfClass("Tool")
-        if not tool then return end
 
-        -- Kalau masih animasi pull, klik terus sampai bisa
+        -- Tunggu sampai state bersih
         local timeout = os.clock() + 2
         while lp:GetAttribute(StateAttribute) ~= nil and os.clock() < timeout do
-            tool:Activate()
             RunService.Heartbeat:Wait()
         end
 
-        -- Lakukan Cast kilat
-        tool:Activate()
-        
-        -- 🆕 RANDOM HOLD TIME (0.05 sampai 0.25 detik)
-        -- Ini bakal ngerandom power di Cobalt, gak bakal sama terus
-        local randomHoldTime = rng:NextNumber(0.05, 0.25) 
-        task.wait(randomHoldTime) 
-        
-        -- Lepas tombol
-        pcall(function() firesignal(tool.Deactivated) end)
+        local holdTime = rng:NextNumber(0.05, 0.25)
+        local castBtn = getHoldPowerBtn()
+
+        if castBtn then
+            -- ✅ MOBILE METHOD: simulasi touch pada HoldPower
+            local inputDown = Instance.new("InputObject")
+            inputDown.UserInputType = Enum.UserInputType.Touch
+            inputDown.UserInputState = Enum.UserInputState.Begin
+            castBtn.InputBegan:Fire(inputDown)
+
+            task.wait(holdTime)
+
+            local inputUp = Instance.new("InputObject")
+            inputUp.UserInputType = Enum.UserInputType.Touch
+            inputUp.UserInputState = Enum.UserInputState.End
+            castBtn.InputEnded:Fire(inputUp)
+
+            addLog("Cast via HoldPower 📱")
+        else
+            -- ✅ PC FALLBACK: pakai tool:Activate()
+            local tool = char:FindFirstChildOfClass("Tool")
+            if not tool then
+                addLog("❌ Tool tidak ditemukan!")
+                return
+            end
+
+            -- Kalau masih animasi pull, klik terus sampai bisa
+            local t = os.clock() + 2
+            while lp:GetAttribute(StateAttribute) ~= nil and os.clock() < t do
+                tool:Activate()
+                RunService.Heartbeat:Wait()
+            end
+
+            tool:Activate()
+            task.wait(holdTime)
+            pcall(function() firesignal(tool.Deactivated) end)
+
+            addLog("Cast via Tool 🖥️")
+        end
 
         State.totalCast = State.totalCast + 1
         CastCount.Text = tostring(State.totalCast)
         addLog("Cast #" .. State.totalCast)
         updateStatus("Menunggu gigitan...", true)
-        State.lastCastTime = os.clock() 
+        State.lastCastTime = os.clock()
     end)
 end
 
@@ -330,9 +369,9 @@ local function handleMinigame(data)
     if not Settings.enabled then return end
 
     isProcessing = true
-    State.lastCastTime = 0 
+    State.lastCastTime = 0
     updateStatus("Minigame aktif!", true)
-    
+
     hideMinigameUI()
 
     local success, err = pcall(function()
@@ -349,7 +388,7 @@ local function handleMinigame(data)
             if hits >= required then break end
 
             local turnActiveAt = startAt + (index - 1) * interval
-            
+
             while workspace:GetServerTimeNow() < turnActiveAt - Settings.clickDelay do
                 RunService.Heartbeat:Wait()
             end
@@ -396,7 +435,7 @@ task.spawn(function()
             local elapsed = os.clock() - State.lastCastTime
             if elapsed >= Settings.stuckTimeout then
                 addLog(string.format("⚠️ Stuck %.0fs! Auto recast...", elapsed))
-                State.lastCastTime = os.clock() 
+                State.lastCastTime = os.clock()
                 instantCast()
             end
         end
@@ -407,11 +446,10 @@ local conn = GameStartedRE.OnClientEvent:Connect(function(data)
     task.spawn(handleMinigame, data)
 end)
 
--- INSTANT RECAST PAS GAME ENDED
 local connEnded = GameEndedRE.OnClientEvent:Connect(function(success, itemName)
     if not Settings.enabled then return end
-    
-    if success then 
+
+    if success then
         updateStatus("Instant Recast...", true)
         instantCast()
     else
@@ -428,7 +466,7 @@ BtnToggle.MouseButton1Click:Connect(function()
         instantCast()
     else
         updateStatus("Idle", false)
-        State.lastCastTime = 0 
+        State.lastCastTime = 0
         addLog("Auto fishing DIMATIKAN")
     end
 end)
