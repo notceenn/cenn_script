@@ -322,10 +322,18 @@ local function instantCast()
         local castBtn = getHoldPowerBtn()
 
         if castBtn then
-            -- ✅ MOBILE METHOD: simulasi hold pada ImageButton
-            castBtn.MouseButton1Down:Fire()
+            -- ✅ MOBILE METHOD: simulasi touch InputBegan + InputEnded
+            local inputDown = Instance.new("InputObject")
+            inputDown.UserInputType = Enum.UserInputType.Touch
+            inputDown.UserInputState = Enum.UserInputState.Begin
+            castBtn.InputBegan:Fire(inputDown)
+
             task.wait(holdTime)
-            castBtn.MouseButton1Up:Fire()
+
+            local inputUp = Instance.new("InputObject")
+            inputUp.UserInputType = Enum.UserInputType.Touch
+            inputUp.UserInputState = Enum.UserInputState.End
+            castBtn.InputEnded:Fire(inputUp)
             addLog("Cast via HoldPower 📱")
         else
             -- ✅ PC FALLBACK: pakai tool:Activate()
