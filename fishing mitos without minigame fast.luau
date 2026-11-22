@@ -296,7 +296,9 @@ end
 local function getHoldPowerBtn()
     local HUD = PlayerGui:FindFirstChild("HUD")
     if not HUD then return nil end
-    local FishingPower = HUD:FindFirstChild("FishingPower")
+    local Controls = HUD:FindFirstChild("Controls")
+    if not Controls then return nil end
+    local FishingPower = Controls:FindFirstChild("FishingPower")
     if not FishingPower then return nil end
     return FishingPower:FindFirstChild("HoldPower")
 end
@@ -320,19 +322,10 @@ local function instantCast()
         local castBtn = getHoldPowerBtn()
 
         if castBtn then
-            -- ✅ MOBILE METHOD: simulasi touch pada HoldPower
-            local inputDown = Instance.new("InputObject")
-            inputDown.UserInputType = Enum.UserInputType.Touch
-            inputDown.UserInputState = Enum.UserInputState.Begin
-            castBtn.InputBegan:Fire(inputDown)
-
+            -- ✅ MOBILE METHOD: simulasi hold pada ImageButton
+            castBtn.MouseButton1Down:Fire()
             task.wait(holdTime)
-
-            local inputUp = Instance.new("InputObject")
-            inputUp.UserInputType = Enum.UserInputType.Touch
-            inputUp.UserInputState = Enum.UserInputState.End
-            castBtn.InputEnded:Fire(inputUp)
-
+            castBtn.MouseButton1Up:Fire()
             addLog("Cast via HoldPower 📱")
         else
             -- ✅ PC FALLBACK: pakai tool:Activate()
