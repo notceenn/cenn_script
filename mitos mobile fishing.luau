@@ -239,9 +239,7 @@ end
 
 local monitorTargets = {
     { path = Knit:WaitForChild("AnnounceService"):WaitForChild("RE"):WaitForChild("Announced"),           label = "AnnounceService",    emoji = "📣" },
-    { path = Knit:WaitForChild("ChatNotificationService"):WaitForChild("RE"):WaitForChild("Message"),     label = "ChatNotification",   emoji = "💬" },
     { path = Knit:WaitForChild("NotificationService"):WaitForChild("RE"):WaitForChild("Show"),            label = "NotificationService",emoji = "🔔" },
-    { path = Knit:WaitForChild("LuckBoostService"):WaitForChild("RE"):WaitForChild("Announced"),          label = "LuckBoost",          emoji = "🍀" },
 }
 
 for _, target in ipairs(monitorTargets) do
